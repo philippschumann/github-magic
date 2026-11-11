@@ -70,7 +70,7 @@ def ensure_worktree(root, repo, pr, branch, base_dir):
             except Exception:
                 run("git", "-C", root, "worktree", "remove", "--force", path)
                 raise
-    # Worktrees made elsewhere (by hand) can lack these too; an existing copy is never overwritten.
+    # Worktrees made elsewhere can lack these too; an existing copy is never overwritten.
     for name in COPY_FILES:
         src, dst = os.path.join(root, name), os.path.join(path, name)
         if os.path.exists(src) and not os.path.exists(dst):
