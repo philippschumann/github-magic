@@ -1,4 +1,4 @@
-# github-magic
+# Github Magic
 
 A Chrome and Firefox extension that adds two buttons to GitHub pull request pages. One checks the PR out locally and opens it in Android Studio or runs it on a device; the other opens a Claude session on it. macOS only.
 

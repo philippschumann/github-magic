@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "GitHub PR Quick Filters",
+  "name": "Github Magic",
   "version": "0.1.1",
   "description": "Opens GitHub PRs locally: Android Studio, phone, emulator or a Claude session.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApiwL3oK8GN/lgSGLIDnc5i9aP/ZPNvwgaJOqzn+pPbbdx27aIOiSA21qWhXKhvNhPaen0pqXC9Bi6gXg3srd3IVZHsmdGEJoJbtu+3y0CNieV+vxjH8be2zVswZErc9P7lNn1/VVjt8Duq5SxJ72QmGOZ72cxzDI4hZuOXqSjxVLooxn1Cd9R3mtl3mZOQ9nm4VGs4JMyydh1BvdaH1g0e8TLYyAGnJZGNDyWA9QVaT36AdHgmZUOENrjbXvBbsp2j1zwV+NoSeAMMmKZqh516tve9Bxe7H0TI6+bOPREcjSNaissn9o/osOfzN/6QmLxMDuigE+lzQSxStSsb5KtQIDAQAB",
