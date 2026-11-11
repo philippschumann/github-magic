@@ -54,7 +54,8 @@ const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const STUDIO_LABEL = "Android Studio";
 const ACTIONS = [
-  { action: "open", label: "Open in Android Studio", busy: "Opening…", done: "Opened" },
+  // Quiet: leaves the button as it is, so a running phone/emulator install keeps showing "Installing…".
+  { action: "open", label: "Open in Android Studio", quiet: true },
   // Phone/emulator runs continue in the background; the button polls until the app is installed and started.
   { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed", poll: true },
   { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed", poll: true },
@@ -146,8 +147,11 @@ function send(msg, cb) {
   });
 }
 
-// Runs one action; `btn` shows its progress and returns to `idle` afterwards. A newer click on the same button wins.
+// Runs one action; `btn` shows its progress and returns to `idle` afterwards. A newer click on the same button wins,
+// except quiet actions, which never touch the button and only report errors.
 function runAction(m, a, btn, idle) {
+  const msg = { repo: m[1], pr: Number(m[2]), action: a.action };
+  if (a.quiet) return send(msg, (_res, err) => err && alert(`${a.label} failed:\n${err}`));
   const token = (btn.run = {});
   const show = (text, title = "") => {
     if (btn.run !== token) return;
@@ -164,7 +168,7 @@ function runAction(m, a, btn, idle) {
     setTimeout(() => show(idle, title), 4000);
   };
   show(a.busy);
-  send({ repo: m[1], pr: Number(m[2]), action: a.action }, (res, err) => {
+  send(msg, (res, err) => {
     if (err) return fail(err);
     if (!a.poll) return finish(res.path);
     const poll = () => send({ action: "status", log: res.log }, (st, err2) => {
