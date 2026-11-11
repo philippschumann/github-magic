@@ -26,7 +26,12 @@ Every action first checks the PR out as a git worktree named `<repo>-<branch>` i
 
 2. Load the extension:
    - **Chrome:** `chrome://extensions` → Developer mode → Load unpacked → this folder.
-   - **Firefox:** `about:debugging#/runtime/this-firefox` → Load Temporary Add-on → `manifest.json`. That lasts until Firefox restarts. For development, `npx web-ext run --source-dir .` starts Firefox with the extension and reloads it on every change.
+   - **Firefox:** `about:debugging#/runtime/this-firefox` → Load Temporary Add-on → `manifest.json`. That lasts until Firefox restarts. For development, `npx web-ext run --source-dir .` starts Firefox with the extension and reloads it on every change (that Firefox shows a red-striped address bar because web-ext remote-controls it).
+   - **Firefox, permanent:** sign it as an unlisted add-on with your [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/), then drag the `.xpi` from `web-ext-artifacts/` into Firefox. Each signed build needs a higher `version` in `manifest.json`.
+
+     ```bash
+     read "K?AMO JWT issuer: " && read -s "S?AMO JWT secret: " && echo && WEB_EXT_API_KEY="$K" WEB_EXT_API_SECRET="$S" npx web-ext sign; unset K S
+     ```
 
 3. Add your repos to `REPOS` at the top of [native-host/open_pr_in_studio.py](native-host/open_pr_in_studio.py): GitHub repo → local main clone. The helper refuses any repo that isn't listed.
 

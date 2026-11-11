@@ -63,7 +63,20 @@ const ACTIONS = [
 const CLAUDE_LABEL = "Claude";
 const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened" };
 const POLL_MS = 3000;
-const TRIANGLE_DOWN = '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg>';
+const TRIANGLE_DOWN = "m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z";
+
+// GitHub's triangle-down octicon, built as DOM nodes (no innerHTML).
+function triangleDown() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ "aria-hidden": "true", focusable: "false", viewBox: "0 0 16 16", width: "16", height: "16", fill: "currentColor" })) {
+    svg.setAttribute(k, v);
+  }
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", TRIANGLE_DOWN);
+  svg.append(path);
+  return svg;
+}
 
 // GitHub's React buttons use hashed class names that change between deploys; borrow the current ones from the page.
 function primerClass(prefix) {
@@ -96,7 +109,7 @@ function makeButton(text, caret = false, variant = "default") {
     const icon = document.createElement("span");
     icon.className = primerClass("prc-Button-TrailingAction-") ?? "";
     icon.dataset.component = "trailingAction";
-    icon.innerHTML = TRIANGLE_DOWN;
+    icon.append(triangleDown());
     btn.append(icon);
   }
   btn.label = label;
