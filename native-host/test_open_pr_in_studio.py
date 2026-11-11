@@ -79,6 +79,32 @@ class Validation(unittest.TestCase):
                 host.handle(dict(ok, **bad))
 
 
+class Update(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.orig = host.run, host.ensure_worktree, host.start_launch
+
+        def run(*cmd, **kw):
+            self.calls.append(" ".join(cmd[:3]))
+            return '{"headRefName": "feat/a", "title": "t"}'
+        host.run = run
+        host.ensure_worktree = lambda *a: "/wt"
+        host.start_launch = lambda *a: self.calls.append("launch") or "/log"
+
+    def tearDown(self):
+        host.run, host.ensure_worktree, host.start_launch = self.orig
+
+    def act(self, action):
+        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action})
+        return self.calls[1:]  # after gh pr view
+
+    def test_open_starts_android_studio_then_updates(self):
+        self.assertEqual(self.act("open"), ["open -a Android Studio", "gh pr checkout"])
+
+    def test_device_run_updates_before_installing(self):
+        self.assertEqual(self.act("phone"), ["gh pr checkout", "launch"])
+
+
 class Devices(Fixture):
     def test_phone_prefers_pixel_10_then_6_then_any(self):
         other = "R5CT device usb:1 model:SM_S911B"

@@ -79,6 +79,12 @@ def ensure_worktree(root, repo, pr, branch, base_dir):
     return os.path.realpath(path)
 
 
+def update(path, repo, pr):
+    # On an existing branch gh fetches the PR head and fast-forwards (merge --ff-only): local commits or
+    # changes it would overwrite stop it with an error instead of being lost.
+    run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
+
+
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CLAUDE_MODEL = re.compile(r"^[a-z0-9][a-z0-9.-]*(\[[a-z0-9]+\])?$")  # an alias like "opus[1m]" or a full model id
 
@@ -240,11 +246,13 @@ def handle(msg):
     info = json.loads(run("gh", "pr", "view", str(pr), "--repo", repo, "--json", "headRefName,title"))
     path = ensure_worktree(root, repo, pr, info["headRefName"], base_dir)
     if action == "open":
-        run(*OPEN, path)
+        run(*OPEN, path)  # returns at once, so Android Studio loads the project while the update runs
+        update(path, repo, pr)
     elif action == "claude":
         write_claude_settings(path, claude)
         open_claude(path, f"{info['title']} (#{pr}): ")
     else:
+        update(path, repo, pr)
         return {"ok": True, "path": path, "log": start_launch(action, path, info["headRefName"])}
     return {"ok": True, "path": path}
 

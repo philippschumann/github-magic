@@ -47,6 +47,9 @@ You can change all three later in the extension's settings (click the extension 
 ## What the actions do
 
 - **Open in Android Studio:** `open -a "Android Studio" <worktree>`. Opening the same PR again brings its window to the front.
+- **Bringing the worktree up to date:** both Android Studio actions pull the PR's latest commits with `gh pr checkout`. That only fast-forwards: local commits, or changes a pull would overwrite, stop it with an error.
+  - Open in Android Studio opens the window first and updates while it loads.
+  - Run on phone / emulator updates first, then builds.
 - **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phone order is Pixel 10, then Pixel 6, then any other phone. The emulator is `Pixel_9_API_35`, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
   - A new run cancels the one still going on that device, whatever PR it was for.
   - If the device refuses the build as a downgrade or because of a different signing key, the app is uninstalled and installed again, which wipes its data.
