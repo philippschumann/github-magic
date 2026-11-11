@@ -48,7 +48,8 @@ function render() {
   anchor.after(bar);
 }
 
-// Dropdown on PR pages; the native host (native-host/) checks the PR out in a worktree and acts on it.
+// PR page actions: an "Android Studio" dropdown and a "Claude" button. The native host (native-host/) checks the
+// PR out in a worktree and acts on it.
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const LABEL = "Android Studio ▾";
@@ -56,17 +57,19 @@ const ACTIONS = [
   { action: "open", label: "Open in Android Studio", busy: "Opening…", done: "Opened ✓" },
   { action: "phone", label: "Run on phone", busy: "Preparing…", done: "Building for phone…" },
   { action: "emulator", label: "Run on emulator", busy: "Preparing…", done: "Building for emulator…" },
-  { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Claude opened ✓" },
 ];
+const CLAUDE_LABEL = "Claude";
+const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Claude opened ✓" };
 
 function addMenuStyle() {
   if (document.getElementById(`${MENU_ID}-style`)) return;
   const style = document.createElement("style");
   style.id = `${MENU_ID}-style`;
   style.textContent = `
-    #${MENU_ID} { position: relative; display: inline-block; margin-top: 4px; }
-    #${MENU_ID} > summary { list-style: none; }
-    #${MENU_ID} > summary::-webkit-details-marker { display: none; }
+    #${MENU_ID} { display: inline-flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
+    #${MENU_ID} details { position: relative; }
+    #${MENU_ID} summary { list-style: none; }
+    #${MENU_ID} summary::-webkit-details-marker { display: none; }
     #${MENU_ID} [role=menu] { position: absolute; z-index: 100; top: calc(100% + 4px); left: 0; min-width: 210px; padding: 4px;
       background: var(--overlay-bgColor, var(--bgColor-default, #fff)); border: 1px solid var(--borderColor-default, #d0d7de);
       border-radius: 12px; box-shadow: var(--shadow-floating-small, 0 8px 24px rgba(0,0,0,.15)); }
@@ -74,6 +77,18 @@ function addMenuStyle() {
       background: none; color: inherit; font: inherit; cursor: pointer; }
     #${MENU_ID} [role=menuitem]:hover, #${MENU_ID} [role=menuitem]:focus-visible { background: var(--control-transparent-bgColor-hover, rgba(0,0,0,.06)); }`;
   document.head.append(style);
+}
+
+// Sends one action to the native host; `el` shows its progress and returns to `idle` afterwards.
+function runAction(m, a, el, idle) {
+  el.textContent = a.busy;
+  chrome.runtime.sendMessage({ repo: m[1], pr: Number(m[2]), action: a.action }, (res) => {
+    const err = chrome.runtime.lastError?.message ?? (res?.ok ? null : res?.error ?? "No response from extension");
+    el.textContent = err ? idle : a.done;
+    el.title = err ?? [res.path, res.log && `Log: ${res.log}`].filter(Boolean).join("\n");
+    if (err) alert(`${a.label} failed:\n${err}`);
+    else setTimeout(() => (el.textContent = idle), 4000);
+  });
 }
 
 function renderPrMenu() {
@@ -86,16 +101,17 @@ function renderPrMenu() {
   if (!m || !anchor) return;
   addMenuStyle();
 
+  const root = document.createElement("div");
+  root.id = MENU_ID;
+  root.dataset.pr = key;
+
   const menu = document.createElement("details");
-  menu.id = MENU_ID;
-  menu.dataset.pr = key;
   const summary = document.createElement("summary");
   summary.className = "btn btn-sm";
   summary.textContent = LABEL;
   summary.setAttribute("aria-haspopup", "menu");
   const list = document.createElement("div");
   list.setAttribute("role", "menu");
-
   for (const a of ACTIONS) {
     const item = document.createElement("button");
     item.type = "button";
@@ -103,28 +119,30 @@ function renderPrMenu() {
     item.textContent = a.label;
     item.addEventListener("click", () => {
       menu.open = false;
-      summary.textContent = a.busy;
-      chrome.runtime.sendMessage({ repo: m[1], pr: Number(m[2]), action: a.action }, (res) => {
-        const err = chrome.runtime.lastError?.message ?? (res?.ok ? null : res?.error ?? "No response from extension");
-        summary.textContent = err ? LABEL : a.done;
-        summary.title = err ?? [res.path, res.log && `Log: ${res.log}`].filter(Boolean).join("\n");
-        if (err) alert(`${a.label} failed:\n${err}`);
-        else setTimeout(() => (summary.textContent = LABEL), 4000);
-      });
+      runAction(m, a, summary, LABEL);
     });
     list.append(item);
   }
   menu.append(summary, list);
-  anchor.append(menu);
+
+  const claude = document.createElement("button");
+  claude.type = "button";
+  claude.className = "btn btn-sm";
+  claude.textContent = CLAUDE_LABEL;
+  claude.setAttribute("aria-label", CLAUDE.label);
+  claude.addEventListener("click", () => runAction(m, CLAUDE, claude, CLAUDE_LABEL));
+
+  root.append(menu, claude);
+  anchor.append(root);
 }
 
 // Close the menu on outside click or Escape.
 document.addEventListener("click", (e) => {
-  const menu = document.getElementById(MENU_ID);
+  const menu = document.querySelector(`#${MENU_ID} details`);
   if (menu?.open && !menu.contains(e.target)) menu.open = false;
 });
 document.addEventListener("keydown", (e) => {
-  const menu = document.getElementById(MENU_ID);
+  const menu = document.querySelector(`#${MENU_ID} details`);
   if (e.key === "Escape" && menu?.open) {
     menu.open = false;
     menu.querySelector("summary").focus();
