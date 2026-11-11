@@ -53,6 +53,10 @@ The first time you use the buttons, they ask for the folder new worktrees go in 
 
 The app id, start activity, emulator and phone order are constants at the top of the helper script.
 
+## Releases
+
+Publishing a GitHub release signs the Firefox build and attaches it as `github-magic-<version>.xpi` ([sign-firefox.yml](.github/workflows/sign-firefox.yml)). The tag must be `v` plus the `version` in `manifest.json`, and the repo needs your AMO JWT issuer and secret as the `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` secrets.
+
 ## Tests
 
 ```bash
