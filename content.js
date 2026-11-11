@@ -108,11 +108,15 @@ function addMenuStyle() {
   // Mirrors GitHub's ActionMenu overlay with its own design tokens, so it follows light and dark themes.
   style.textContent = `
     #${MENU_ID} { position: relative; display: inline-flex; gap: 8px; align-items: center; margin-top: 8px; }
+    #${MENU_ID} > button { display: inline-flex; align-items: center; gap: 4px; }
+    #${MENU_ID} > button [data-component] { display: inline-flex; align-items: center; }
+    #${MENU_ID} > button svg { display: block; }
     #${MENU_ID} [role=menu] { position: absolute; z-index: 100; top: calc(100% + 4px); left: 0; min-width: 192px; padding: 8px 0;
       background: var(--overlay-bgColor, #fff); border-radius: var(--borderRadius-large, 12px);
       box-shadow: var(--shadow-floating-small, 0 0 0 1px #d1d9e080, 0 6px 12px -3px #25292e0a, 0 6px 18px 0 #25292e1f); }
     #${MENU_ID} [role=menu][hidden] { display: none; }
-    #${MENU_ID} [role=menuitem] { display: block; width: calc(100% - 16px); margin: 0 8px; padding: 6px 8px; border: 0;
+    #${MENU_ID} [role=menuitem] { display: flex; align-items: center; box-sizing: border-box; min-height: 32px;
+      width: calc(100% - 16px); margin: 0 8px; padding: 6px 8px; border: 0;
       border-radius: var(--borderRadius-medium, 6px); background: transparent; color: var(--fgColor-default, inherit);
       font: inherit; font-size: var(--text-body-size-medium, 14px); line-height: 20px; text-align: left; cursor: pointer; }
     #${MENU_ID} [role=menuitem]:hover, #${MENU_ID} [role=menuitem]:focus-visible {
