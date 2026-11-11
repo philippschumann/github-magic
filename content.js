@@ -158,7 +158,13 @@ function send(msg, cb) {
 // Runs one action; `btn` shows its progress and returns to `idle` afterwards. A newer click on the same button wins,
 // except quiet actions, which never touch the button and only report errors.
 function runAction(m, a, btn, idle) {
-  const msg = { repo: m[1], pr: Number(m[2]), action: a.action };
+  // The header links the base branch, then the head branch; a fork's head reads "owner:branch".
+  const branches = document.querySelectorAll('[data-component="PageHeader.Description"] a[data-component="BranchName"]');
+  const msg = {
+    repo: m[1], pr: Number(m[2]), action: a.action,
+    branch: [...branches].at(-1)?.textContent ?? "",
+    title: document.querySelector('[data-component="PageHeader"] h1 .markdown-title')?.textContent ?? "",
+  };
   if (a.quiet) return send(msg, (_res, err) => err && alert(`${a.label} failed:\n${err}`));
   const token = (btn.run = {});
   const show = (text, title = "") => {

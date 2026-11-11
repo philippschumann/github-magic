@@ -2,8 +2,8 @@
 """Native messaging host: checks out a GitHub PR in a sibling git worktree, then opens it in Android Studio,
 runs it on a phone or emulator, or opens a Claude desktop session there.
 
-Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|claude"} from the browser extension,
-replies {"ok": true, "path": ...} or {"ok": false, "error": ...}. Only repos listed in REPOS are accepted.
+Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|claude", "branch": ..., "title": ...}
+from the browser extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or {"ok": false, "error": ...}. Only repos listed in REPOS are accepted.
 Phone and emulator runs take minutes: they continue in a background process (this script with --launch)
 that reports through a macOS notification and logs to LOG_DIR.
 """
@@ -36,7 +36,8 @@ BOOT_TIMEOUT = 300
 LOG_DIR = os.path.expanduser("~/Library/Logs/github-pr-quick-filters")
 SESSIONS_DIR = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions")
 
-# Browsers start the host with a minimal PATH and no JAVA_HOME; gh and git come from Homebrew.
+# Browsers start the host with a minimal PATH and no JAVA_HOME; keep Homebrew's tools (git, anything the build
+# calls) reachable.
 os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "/usr/bin:/bin")
 
 
@@ -57,7 +58,7 @@ def worktree_for_branch(root, branch):
     return None
 
 
-def ensure_worktree(root, repo, pr, branch, base_dir):
+def ensure_worktree(root, branch, base_dir):
     # Branch already checked out (main clone or another worktree): use that instead of a second copy.
     path = worktree_for_branch(root, branch)
     if not path:
@@ -66,7 +67,7 @@ def ensure_worktree(root, repo, pr, branch, base_dir):
         if not os.path.exists(path):
             run("git", "-C", root, "worktree", "add", "--detach", path)
             try:
-                run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
+                update(path, branch)
             except Exception:
                 run("git", "-C", root, "worktree", "remove", "--force", path)
                 raise
@@ -79,10 +80,13 @@ def ensure_worktree(root, repo, pr, branch, base_dir):
     return os.path.realpath(path)
 
 
-def update(path, repo, pr):
-    # On an existing branch gh fetches the PR head and fast-forwards (merge --ff-only): local commits or
-    # changes it would overwrite stop it with an error instead of being lost.
-    run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
+def update(path, branch):
+    # Fetch the branch, switch to it (a new local branch tracks origin's), then only fast-forward: local commits
+    # or changes it would overwrite stop it with an error instead of being lost.
+    # shortcut: the branch must live on the clone's "origin"; PRs from forks would need their own remote.
+    run("git", "-C", path, "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+    run("git", "-C", path, "-c", "checkout.defaultRemote=origin", "switch", branch)
+    run("git", "-C", path, "merge", "--ff-only", f"refs/remotes/origin/{branch}")
 
 
 def open_claude(path, prompt):
@@ -203,19 +207,24 @@ def handle(msg):
         raise ValueError(f"invalid PR number: {pr!r}")
     if action not in ACTIONS:
         raise ValueError(f"unknown action: {action!r}")
+    # The branch name ends up in git arguments and the worktree path: no options, no "..". A fork's "owner:branch"
+    # fails here too.
+    branch = msg.get("branch")
+    if not isinstance(branch, str) or branch.startswith("-") or subprocess.run(
+            ["git", "check-ref-format", f"refs/heads/{branch}"], capture_output=True).returncode:
+        raise ValueError(f"can't check out branch {branch!r}; PRs from forks aren't supported")
     root = os.path.expanduser(REPOS[repo])
     base_dir = worktree_dir(msg.get("worktreeDir"))
 
-    info = json.loads(run("gh", "pr", "view", str(pr), "--repo", repo, "--json", "headRefName,title"))
-    path = ensure_worktree(root, repo, pr, info["headRefName"], base_dir)
+    path = ensure_worktree(root, branch, base_dir)
     if action == "open":
         run(*OPEN, path)  # returns at once, so Android Studio loads the project while the update runs
-        update(path, repo, pr)
+        update(path, branch)
     elif action == "claude":
-        open_claude(path, f"{info['title']} (#{pr}): ")
+        open_claude(path, f"{msg.get('title') or ''} (#{pr}): ")
     else:
-        update(path, repo, pr)
-        return {"ok": True, "path": path, "log": start_launch(action, path, info["headRefName"])}
+        update(path, branch)
+        return {"ok": True, "path": path, "log": start_launch(action, path, branch)}
     return {"ok": True, "path": path}
 
 

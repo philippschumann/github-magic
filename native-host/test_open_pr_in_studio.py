@@ -62,13 +62,17 @@ class Fixture(unittest.TestCase):
 
 class Validation(unittest.TestCase):
     def test_rejects_bad_input(self):
-        ok = {"repo": "example/MyAndroidApp", "pr": 1, "action": "open"}
+        ok = {"repo": "example/MyAndroidApp", "pr": 1, "action": "open", "branch": "feat/a"}
         for bad, error in [
             ({"repo": "evil/repo"}, "not configured"),
             ({"pr": "1; rm -rf /"}, "invalid PR"),
             ({"pr": True}, "invalid PR"),
             ({"pr": -3}, "invalid PR"),
             ({"action": "rm"}, "unknown action"),
+            ({"branch": "--upload-pack=x"}, "can't check out"),
+            ({"branch": "../../x"}, "can't check out"),
+            ({"branch": "someone:feat/a"}, "forks"),
+            ({"branch": None}, "can't check out"),
             ({"worktreeDir": "/does/not/exist"}, "does not exist"),
             ({"worktreeDir": "relative/dir"}, "does not exist"),
         ]:
@@ -79,27 +83,24 @@ class Validation(unittest.TestCase):
 class Update(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.orig = host.run, host.ensure_worktree, host.start_launch
-
-        def run(*cmd, **kw):
-            self.calls.append(" ".join(cmd[:3]))
-            return '{"headRefName": "feat/a", "title": "t"}'
-        host.run = run
+        self.orig = host.run, host.ensure_worktree, host.update, host.start_launch
+        host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd[:3]))
         host.ensure_worktree = lambda *a: "/wt"
+        host.update = lambda *a: self.calls.append("update")
         host.start_launch = lambda *a: self.calls.append("launch") or "/log"
 
     def tearDown(self):
-        host.run, host.ensure_worktree, host.start_launch = self.orig
+        host.run, host.ensure_worktree, host.update, host.start_launch = self.orig
 
     def act(self, action):
-        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action})
-        return self.calls[1:]  # after gh pr view
+        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a"})
+        return self.calls
 
     def test_open_starts_android_studio_then_updates(self):
-        self.assertEqual(self.act("open"), ["open -a Android Studio", "gh pr checkout"])
+        self.assertEqual(self.act("open"), ["open -a Android Studio", "update"])
 
     def test_device_run_updates_before_installing(self):
-        self.assertEqual(self.act("phone"), ["gh pr checkout", "launch"])
+        self.assertEqual(self.act("phone"), ["update", "launch"])
 
 
 class Devices(Fixture):
@@ -166,13 +167,49 @@ class Worktrees(unittest.TestCase):
         with open(os.path.join(tmp, "own", "local.properties"), "w") as f:
             f.write("sdk.dir=/own\n")
 
-        path = host.ensure_worktree(root, "o/r", 1, "feat/a", None)
+        path = host.ensure_worktree(root, "feat/a", None)
         self.assertEqual(path, os.path.realpath(os.path.join(tmp, "elsewhere")))
         with open(os.path.join(path, "local.properties")) as f:
             self.assertEqual(f.read(), "sdk.dir=/main\n")
-        path = host.ensure_worktree(root, "o/r", 2, "feat/b", None)
+        path = host.ensure_worktree(root, "feat/b", None)
         with open(os.path.join(path, "local.properties")) as f:
             self.assertEqual(f.read(), "sdk.dir=/own\n")
+
+    def test_new_worktree_tracks_origin_and_updates_fast_forward_only(self):
+        tmp = tempfile.mkdtemp()
+        origin, root, pusher = (os.path.join(tmp, n) for n in ("origin.git", "App", "pusher"))
+
+        def git(*args):
+            return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+
+        def push_commit():  # someone pushes a new commit to the PR's branch
+            git("-C", pusher, "commit", "-q", "--allow-empty", "-m", "x")
+            git("-C", pusher, "push", "-q", "origin", "HEAD:feat/a")
+            return git("-C", pusher, "rev-parse", "HEAD")
+
+        git("init", "-q", "--bare", origin)
+        git("clone", "-q", origin, pusher)
+        git("-C", pusher, "commit", "-q", "--allow-empty", "-m", "base")
+        git("-C", pusher, "push", "-q", "origin", "HEAD:main")
+        git("clone", "-q", "-b", "main", origin, root)
+        head = push_commit()  # the main clone has never fetched feat/a
+
+        path = host.ensure_worktree(root, "feat/a", tmp)
+        self.assertEqual(path, os.path.realpath(os.path.join(tmp, "App-feat-a")))
+        self.assertEqual(git("-C", path, "rev-parse", "--abbrev-ref", "HEAD", "@{upstream}"), "feat/a\norigin/feat/a")
+        self.assertEqual(git("-C", path, "rev-parse", "HEAD"), head)
+
+        head = push_commit()
+        host.update(path, "feat/a")
+        self.assertEqual(git("-C", path, "rev-parse", "HEAD"), head)
+
+        git("-C", path, "commit", "-q", "--allow-empty", "-m", "local")
+        local = git("-C", path, "rev-parse", "HEAD")
+        push_commit()
+        with self.assertRaisesRegex(RuntimeError, "git -C"):
+            host.update(path, "feat/a")
+        self.assertEqual(git("-C", path, "rev-parse", "HEAD"), local)  # the local commit is kept
 
 
 class Cancel(unittest.TestCase):

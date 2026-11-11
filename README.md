@@ -5,12 +5,12 @@ A Chrome and Firefox extension that adds two buttons to GitHub pull request page
 - **Android Studio ▾**: Open in Android Studio, Run on phone, Run on emulator
 - **Claude**: opens the Claude desktop session for the PR's worktree, or starts a new one
 
-Every action first checks the PR out as a git worktree named `<repo>-<branch>` inside the folder you choose. If the branch is already checked out somewhere (your main clone, another worktree), it uses that folder instead.
+Every action first checks the PR out as a git worktree named `<repo>-<branch>` inside the folder you choose. If the branch is already checked out somewhere (your main clone, another worktree), it uses that folder instead. The branch name comes from the PR page and is fetched from `origin`, so PRs from forks aren't supported.
 
 ## Requirements
 
-- [`gh`](https://cli.github.com) installed via Homebrew and logged in
-- `/usr/bin/python3` (comes with the Xcode command line tools)
+- The Xcode command line tools (`xcode-select --install`), for `git` and `/usr/bin/python3`
+- A main clone of each repo whose `origin` is the GitHub repo and can fetch without a prompt (SSH key or saved credentials)
 - Android Studio, and an Android SDK whose path is set as `sdk.dir` in the main clone's `local.properties`
 - The Claude desktop app, for the Claude button
 
@@ -42,7 +42,7 @@ The first time you use the buttons, they ask for the folder new worktrees go in 
 ## What the actions do
 
 - **Open in Android Studio:** `open -a "Android Studio" <worktree>`. Opening the same PR again brings its window to the front.
-- **Bringing the worktree up to date:** both Android Studio actions pull the PR's latest commits with `gh pr checkout`. That only fast-forwards: local commits, or changes a pull would overwrite, stop it with an error.
+- **Bringing the worktree up to date:** both Android Studio actions fetch the PR's branch from `origin` and merge it with `--ff-only`. That only fast-forwards: local commits, or changes a pull would overwrite, stop it with an error.
   - Open in Android Studio opens the window first and updates while it loads.
   - Run on phone / emulator updates first, then builds.
 - **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phone order is Pixel 10, then Pixel 6, then any other phone. The emulator is `Pixel_9_API_35`, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
