@@ -101,19 +101,26 @@ def open_claude(path, prompt):
     run("open", url)
 
 
-def cancel_previous(target):
-    """Stop the run still going on this target (any PR), so a new click starts fresh."""
+def current_run(target):
+    """The latest run on this target as {"pid", "log"}, if its process is still one of our runs."""
     try:
         with open(os.path.join(LOG_DIR, f"{target}.pid")) as f:
-            pid = int(f.read())
-    except (OSError, ValueError):
-        return
-    # The pid may have been reused by an unrelated process since; only touch one of our own runs.
+            info = json.load(f)
+        pid = int(info["pid"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    # The pid may have been reused by an unrelated process since; only count one of our own runs.
     cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    if "--launch" in cmd and os.path.basename(__file__) in cmd:
+    return info if "--launch" in cmd and os.path.basename(__file__) in cmd else None
+
+
+def cancel_previous(target):
+    """Stop the run still going on this target (any PR), so a new click starts fresh."""
+    info = current_run(target)
+    if info:
         try:
             # Each run leads its own process group: this ends the gradle client too, and its daemon cancels the build.
-            os.killpg(pid, signal.SIGTERM)
+            os.killpg(int(info["pid"]), signal.SIGTERM)
         except ProcessLookupError:
             pass
 
@@ -127,8 +134,29 @@ def start_launch(target, path, branch):
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path],
                                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     with open(os.path.join(LOG_DIR, f"{target}.pid"), "w") as f:
-        f.write(str(proc.pid))
+        json.dump({"pid": proc.pid, "log": log}, f)
     return log
+
+
+def run_status(log):
+    """State of a phone/emulator run, read from the last line its background process wrote."""
+    log = os.path.realpath(log) if isinstance(log, str) else ""
+    m = re.search(r"-(phone|emulator)\.log$", log)
+    if os.path.dirname(log) != os.path.realpath(LOG_DIR) or not m or not os.path.isfile(log):
+        raise ValueError("unknown run")
+    with open(log, errors="replace") as f:
+        lines = [line for line in f.read().splitlines() if line.strip()]
+    last = lines[-1] if lines else ""
+    if last.startswith("started on "):
+        return {"ok": True, "state": "started", "message": last}
+    if last.startswith("FAILED: "):
+        return {"ok": True, "state": "failed", "message": last[len("FAILED: "):]}
+    if last == "CANCELLED":
+        return {"ok": True, "state": "cancelled"}
+    info = current_run(m.group(1))
+    if info and os.path.realpath(info.get("log", "")) == log:
+        return {"ok": True, "state": "running"}
+    return {"ok": True, "state": "failed", "message": "the run stopped without finishing"}
 
 
 def choose_folder(current):
@@ -161,6 +189,8 @@ def handle(msg):
     repo, pr, action = msg.get("repo"), msg.get("pr"), msg.get("action", "open")
     if action == "choose_folder":
         return choose_folder(msg.get("current"))
+    if action == "status":
+        return run_status(msg.get("log"))
     if repo not in REPOS:
         raise ValueError(f"{repo} is not configured in {os.path.abspath(__file__)}")
     if not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0:
@@ -288,8 +318,15 @@ def notify(text, title):
                     "-e", "end run", text, title], stdin=subprocess.DEVNULL, capture_output=True)
 
 
+def on_cancel(_signum, _frame):
+    # A newer run on this target sent SIGTERM; the marker lets the extension tell "cancelled" from "failed".
+    print("CANCELLED", flush=True)
+    sys.exit(143)
+
+
 def launch_main(target, path):
     title = f"{os.path.basename(path)} on {target}"
+    signal.signal(signal.SIGTERM, on_cancel)
     try:
         serial = launch(target, path)
         print(f"started on {serial}", flush=True)

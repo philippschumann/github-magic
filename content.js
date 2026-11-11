@@ -52,42 +52,110 @@ function render() {
 // PR out in a worktree and acts on it.
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
-const LABEL = "Android Studio ▾";
+const STUDIO_LABEL = "Android Studio";
 const ACTIONS = [
   { action: "open", label: "Open in Android Studio", busy: "Opening…", done: "Opened ✓" },
-  { action: "phone", label: "Run on phone", busy: "Preparing…", done: "Building for phone…" },
-  { action: "emulator", label: "Run on emulator", busy: "Preparing…", done: "Building for emulator…" },
+  // Phone/emulator runs continue in the background; the button polls until the app is installed and started.
+  { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed ✓", poll: true },
+  { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed ✓", poll: true },
 ];
 const CLAUDE_LABEL = "Claude";
-const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Claude opened ✓" };
+const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened ✓" };
+const POLL_MS = 3000;
+const TRIANGLE_DOWN = '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg>';
+
+// GitHub's React buttons use hashed class names that change between deploys; borrow the current ones from the page.
+function primerClass(prefix) {
+  const el = document.querySelector(`[class*="${prefix}"]`);
+  return el ? [...el.classList].find((c) => c.startsWith(prefix)) : null;
+}
+
+function makeButton(text, caret = false) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  const label = document.createElement("span");
+  label.textContent = text;
+  const base = primerClass("prc-Button-ButtonBase-");
+  if (base) {
+    btn.className = base;
+    Object.assign(btn.dataset, { component: "Button", loading: "false", size: "small", variant: "default" });
+    const content = document.createElement("span");
+    content.className = primerClass("prc-Button-ButtonContent-") ?? "";
+    Object.assign(content.dataset, { component: "buttonContent", align: "center" });
+    label.className = primerClass("prc-Button-Label-") ?? "";
+    label.dataset.component = "text";
+    content.append(label);
+    btn.append(content);
+  } else {
+    btn.className = "btn btn-sm"; // pages without GitHub's React buttons: classic Primer CSS
+    btn.append(label);
+  }
+  if (caret) {
+    const icon = document.createElement("span");
+    icon.className = primerClass("prc-Button-TrailingAction-") ?? "";
+    icon.dataset.component = "trailingAction";
+    icon.innerHTML = TRIANGLE_DOWN;
+    btn.append(icon);
+  }
+  btn.label = label;
+  return btn;
+}
 
 function addMenuStyle() {
   if (document.getElementById(`${MENU_ID}-style`)) return;
   const style = document.createElement("style");
   style.id = `${MENU_ID}-style`;
+  // Mirrors GitHub's ActionMenu overlay with its own design tokens, so it follows light and dark themes.
   style.textContent = `
-    #${MENU_ID} { display: inline-flex; gap: 6px; align-items: flex-start; margin-top: 4px; }
-    #${MENU_ID} details { position: relative; }
-    #${MENU_ID} summary { list-style: none; }
-    #${MENU_ID} summary::-webkit-details-marker { display: none; }
-    #${MENU_ID} [role=menu] { position: absolute; z-index: 100; top: calc(100% + 4px); left: 0; min-width: 210px; padding: 4px;
-      background: var(--overlay-bgColor, var(--bgColor-default, #fff)); border: 1px solid var(--borderColor-default, #d0d7de);
-      border-radius: 12px; box-shadow: var(--shadow-floating-small, 0 8px 24px rgba(0,0,0,.15)); }
-    #${MENU_ID} [role=menuitem] { display: block; width: 100%; text-align: left; padding: 6px 8px; border: 0; border-radius: 6px;
-      background: none; color: inherit; font: inherit; cursor: pointer; }
-    #${MENU_ID} [role=menuitem]:hover, #${MENU_ID} [role=menuitem]:focus-visible { background: var(--control-transparent-bgColor-hover, rgba(0,0,0,.06)); }`;
+    #${MENU_ID} { position: relative; display: inline-flex; gap: 8px; align-items: center; margin-top: 8px; }
+    #${MENU_ID} [role=menu] { position: absolute; z-index: 100; top: calc(100% + 4px); left: 0; min-width: 192px; padding: 8px 0;
+      background: var(--overlay-bgColor, #fff); border-radius: var(--borderRadius-large, 12px);
+      box-shadow: var(--shadow-floating-small, 0 0 0 1px #d1d9e080, 0 6px 12px -3px #25292e0a, 0 6px 18px 0 #25292e1f); }
+    #${MENU_ID} [role=menu][hidden] { display: none; }
+    #${MENU_ID} [role=menuitem] { display: block; width: calc(100% - 16px); margin: 0 8px; padding: 6px 8px; border: 0;
+      border-radius: var(--borderRadius-medium, 6px); background: transparent; color: var(--fgColor-default, inherit);
+      font: inherit; font-size: var(--text-body-size-medium, 14px); line-height: 20px; text-align: left; cursor: pointer; }
+    #${MENU_ID} [role=menuitem]:hover, #${MENU_ID} [role=menuitem]:focus-visible {
+      background: var(--control-transparent-bgColor-hover, #818b981a); outline: none; }`;
   document.head.append(style);
 }
 
-// Sends one action to the native host; `el` shows its progress and returns to `idle` afterwards.
-function runAction(m, a, el, idle) {
-  el.textContent = a.busy;
-  chrome.runtime.sendMessage({ repo: m[1], pr: Number(m[2]), action: a.action }, (res) => {
-    const err = chrome.runtime.lastError?.message ?? (res?.ok ? null : res?.error ?? "No response from extension");
-    el.textContent = err ? idle : a.done;
-    el.title = err ?? [res.path, res.log && `Log: ${res.log}`].filter(Boolean).join("\n");
-    if (err) alert(`${a.label} failed:\n${err}`);
-    else setTimeout(() => (el.textContent = idle), 4000);
+function send(msg, cb) {
+  chrome.runtime.sendMessage(msg, (res) => {
+    cb(res, chrome.runtime.lastError?.message ?? (res?.ok ? null : res?.error ?? "No response from extension"));
+  });
+}
+
+// Runs one action; `btn` shows its progress and returns to `idle` afterwards. A newer click on the same button wins.
+function runAction(m, a, btn, idle) {
+  const token = (btn.run = {});
+  const show = (text, title = "") => {
+    if (btn.run !== token) return;
+    btn.label.textContent = text;
+    btn.title = title;
+  };
+  const fail = (err) => {
+    if (btn.run !== token) return;
+    show(idle, err);
+    alert(`${a.label} failed:\n${err}`);
+  };
+  const finish = (title) => {
+    show(a.done, title);
+    setTimeout(() => show(idle, title), 4000);
+  };
+  show(a.busy);
+  send({ repo: m[1], pr: Number(m[2]), action: a.action }, (res, err) => {
+    if (err) return fail(err);
+    if (!a.poll) return finish(res.path);
+    const poll = () => send({ action: "status", log: res.log }, (st, err2) => {
+      if (btn.run !== token) return;
+      if (err2) return fail(err2);
+      if (st.state === "running") return setTimeout(poll, POLL_MS);
+      if (st.state === "started") return finish(st.message);
+      if (st.state === "cancelled") return show(idle, "Cancelled: a newer run took over");
+      fail(`${st.message}\nLog: ${res.log}`);
+    });
+    setTimeout(poll, POLL_MS);
   });
 }
 
@@ -105,47 +173,53 @@ function renderPrMenu() {
   root.id = MENU_ID;
   root.dataset.pr = key;
 
-  const menu = document.createElement("details");
-  const summary = document.createElement("summary");
-  summary.className = "btn btn-sm";
-  summary.textContent = LABEL;
-  summary.setAttribute("aria-haspopup", "menu");
+  const studio = makeButton(STUDIO_LABEL, true);
+  studio.setAttribute("aria-haspopup", "menu");
+  studio.setAttribute("aria-expanded", "false");
   const list = document.createElement("div");
   list.setAttribute("role", "menu");
+  list.setAttribute("aria-label", STUDIO_LABEL);
+  list.hidden = true;
+  studio.addEventListener("click", () => setMenuOpen(list.hidden));
   for (const a of ACTIONS) {
     const item = document.createElement("button");
     item.type = "button";
     item.setAttribute("role", "menuitem");
     item.textContent = a.label;
     item.addEventListener("click", () => {
-      menu.open = false;
-      runAction(m, a, summary, LABEL);
+      setMenuOpen(false);
+      runAction(m, a, studio, STUDIO_LABEL);
     });
     list.append(item);
   }
-  menu.append(summary, list);
 
-  const claude = document.createElement("button");
-  claude.type = "button";
-  claude.className = "btn btn-sm";
-  claude.textContent = CLAUDE_LABEL;
+  const claude = makeButton(CLAUDE_LABEL);
   claude.setAttribute("aria-label", CLAUDE.label);
   claude.addEventListener("click", () => runAction(m, CLAUDE, claude, CLAUDE_LABEL));
 
-  root.append(menu, claude);
+  root.append(studio, claude, list);
   anchor.append(root);
+}
+
+function setMenuOpen(open) {
+  const button = document.querySelector(`#${MENU_ID} [aria-haspopup=menu]`);
+  const list = document.querySelector(`#${MENU_ID} [role=menu]`);
+  if (!button || !list) return;
+  list.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
 }
 
 // Close the menu on outside click or Escape. Capture phase: GitHub's own handlers stop some clicks from bubbling.
 document.addEventListener("click", (e) => {
-  const menu = document.querySelector(`#${MENU_ID} details`);
-  if (menu?.open && !menu.contains(e.target)) menu.open = false;
+  const button = document.querySelector(`#${MENU_ID} [aria-haspopup=menu]`);
+  const list = document.querySelector(`#${MENU_ID} [role=menu]`);
+  if (list && !list.hidden && !list.contains(e.target) && !button.contains(e.target)) setMenuOpen(false);
 }, true);
 document.addEventListener("keydown", (e) => {
-  const menu = document.querySelector(`#${MENU_ID} details`);
-  if (e.key === "Escape" && menu?.open) {
-    menu.open = false;
-    menu.querySelector("summary").focus();
+  const list = document.querySelector(`#${MENU_ID} [role=menu]`);
+  if (e.key === "Escape" && list && !list.hidden) {
+    setMenuOpen(false);
+    document.querySelector(`#${MENU_ID} [aria-haspopup=menu]`).focus();
   }
 });
 

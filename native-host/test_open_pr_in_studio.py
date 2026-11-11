@@ -157,10 +157,10 @@ class Cancel(unittest.TestCase):
     def tearDown(self):
         host.LOG_DIR = self.orig
 
-    def spawn(self, *args):
+    def spawn(self, *args, log=""):
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", *args], start_new_session=True)
         with open(os.path.join(host.LOG_DIR, "phone.pid"), "w") as f:
-            f.write(str(p.pid))
+            json.dump({"pid": p.pid, "log": log}, f)
         return p
 
     def test_new_run_kills_the_previous_one(self):
@@ -177,6 +177,55 @@ class Cancel(unittest.TestCase):
 
     def test_no_previous_run(self):
         host.cancel_previous("emulator")  # no pid file: nothing to do
+
+    def test_cancelled_run_writes_marker(self):
+        tmp = tempfile.mkdtemp()
+        tools = os.path.join(tmp, "sdk", "platform-tools")
+        os.makedirs(tools)
+        write_exe(os.path.join(tools, "adb"), '#!/bin/sh\n[ "$*" = "devices -l" ] && printf "List\\nP1 device model:Pixel_6\\n"\n')
+        worktree = os.path.join(tmp, "wt")
+        os.makedirs(worktree)
+        with open(os.path.join(worktree, "local.properties"), "w") as f:
+            f.write(f"sdk.dir={os.path.join(tmp, 'sdk')}\n")
+        write_exe(os.path.join(worktree, "gradlew"), "#!/bin/sh\nsleep 30\n")  # a long build
+
+        log = host.start_launch("phone", worktree, "feat/a")
+        time.sleep(1.5)
+        self.assertEqual(host.run_status(log)["state"], "running")
+        host.cancel_previous("phone")
+        deadline = time.time() + 5
+        while host.run_status(log)["state"] == "running" and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertEqual(host.run_status(log)["state"], "cancelled")
+
+
+class Status(unittest.TestCase):
+    def setUp(self):
+        self.orig = host.LOG_DIR
+        host.LOG_DIR = tempfile.mkdtemp()
+
+    def tearDown(self):
+        host.LOG_DIR = self.orig
+
+    def status(self, *lines, name="feat-a-phone.log"):
+        log = os.path.join(host.LOG_DIR, name)
+        with open(log, "w") as f:
+            f.write("\n".join(lines) + "\n\n")
+        return host.run_status(log)
+
+    def test_states_from_last_line(self):
+        self.assertEqual(self.status("installing", "BUILD SUCCESSFUL", "started on P1")["state"], "started")
+        self.assertEqual(self.status("installing", "FAILED: no phone connected"), {"ok": True, "state": "failed", "message": "no phone connected"})
+        self.assertEqual(self.status("installing", "CANCELLED")["state"], "cancelled")
+        # No final line and no live run behind it: it died without saying why.
+        self.assertEqual(self.status("installing")["state"], "failed")
+
+    def test_only_logs_in_log_dir(self):
+        for bad in ["/etc/passwd", os.path.join(host.LOG_DIR, "..", "x-phone.log"), None, 3]:
+            with self.assertRaisesRegex(ValueError, "unknown run"):
+                host.run_status(bad)
+        with self.assertRaisesRegex(ValueError, "unknown run"):
+            self.status("x", name="notes.txt")
 
 
 class Claude(unittest.TestCase):
