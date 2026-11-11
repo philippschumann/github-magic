@@ -54,13 +54,13 @@ const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const STUDIO_LABEL = "Android Studio";
 const ACTIONS = [
-  { action: "open", label: "Open in Android Studio", busy: "Opening…", done: "Opened ✓" },
+  { action: "open", label: "Open in Android Studio", busy: "Opening…", done: "Opened" },
   // Phone/emulator runs continue in the background; the button polls until the app is installed and started.
-  { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed ✓", poll: true },
-  { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed ✓", poll: true },
+  { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed", poll: true },
+  { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed", poll: true },
 ];
 const CLAUDE_LABEL = "Claude";
-const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened ✓" };
+const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened" };
 const POLL_MS = 3000;
 const TRIANGLE_DOWN = '<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg>';
 
@@ -70,15 +70,15 @@ function primerClass(prefix) {
   return el ? [...el.classList].find((c) => c.startsWith(prefix)) : null;
 }
 
-function makeButton(text, caret = false) {
+function makeButton(text, caret = false, variant = "default") {
   const btn = document.createElement("button");
   btn.type = "button";
   const label = document.createElement("span");
   label.textContent = text;
   const base = primerClass("prc-Button-ButtonBase-");
   if (base) {
-    btn.className = base;
-    Object.assign(btn.dataset, { component: "Button", loading: "false", size: "small", variant: "default" });
+    btn.className = `${base} ${MENU_ID}-btn`;
+    Object.assign(btn.dataset, { component: "Button", loading: "false", size: "small", variant });
     const content = document.createElement("span");
     content.className = primerClass("prc-Button-ButtonContent-") ?? "";
     Object.assign(content.dataset, { component: "buttonContent", align: "center" });
@@ -87,7 +87,8 @@ function makeButton(text, caret = false) {
     content.append(label);
     btn.append(content);
   } else {
-    btn.className = "btn btn-sm"; // pages without GitHub's React buttons: classic Primer CSS
+    // Pages without GitHub's React buttons: classic Primer CSS.
+    btn.className = `btn btn-sm ${variant === "primary" ? "btn-primary " : ""}${MENU_ID}-btn`;
     btn.append(label);
   }
   if (caret) {
@@ -108,9 +109,9 @@ function addMenuStyle() {
   // Mirrors GitHub's ActionMenu overlay with its own design tokens, so it follows light and dark themes.
   style.textContent = `
     #${MENU_ID} { position: relative; display: inline-flex; gap: 8px; align-items: center; margin-top: 8px; }
-    #${MENU_ID} > button { display: inline-flex; align-items: center; gap: 4px; }
-    #${MENU_ID} > button [data-component] { display: inline-flex; align-items: center; }
-    #${MENU_ID} > button svg { display: block; }
+    .${MENU_ID}-btn { display: inline-flex; align-items: center; gap: 4px; }
+    .${MENU_ID}-btn [data-component] { display: inline-flex; align-items: center; }
+    .${MENU_ID}-btn svg { display: block; }
     #${MENU_ID} [role=menu] { position: absolute; z-index: 100; top: calc(100% + 4px); left: 0; min-width: 192px; padding: 8px 0;
       background: var(--overlay-bgColor, #fff); border-radius: var(--borderRadius-large, 12px);
       box-shadow: var(--shadow-floating-small, 0 0 0 1px #d1d9e080, 0 6px 12px -3px #25292e0a, 0 6px 18px 0 #25292e1f); }
@@ -120,7 +121,22 @@ function addMenuStyle() {
       border-radius: var(--borderRadius-medium, 6px); background: transparent; color: var(--fgColor-default, inherit);
       font: inherit; font-size: var(--text-body-size-medium, 14px); line-height: 20px; text-align: left; cursor: pointer; }
     #${MENU_ID} [role=menuitem]:hover, #${MENU_ID} [role=menuitem]:focus-visible {
-      background: var(--control-transparent-bgColor-hover, #818b981a); outline: none; }`;
+      background: var(--control-transparent-bgColor-hover, #818b981a); outline: none; }
+    #${MENU_ID}-dialog { padding: 0; border: 0; width: min(440px, calc(100vw - 32px)); border-radius: var(--borderRadius-large, 12px);
+      background: var(--overlay-bgColor, #fff); color: var(--fgColor-default, #1f2328);
+      box-shadow: var(--shadow-floating-large, 0 0 0 1px #d1d9e080, 0 40px 80px 0 #25292e3d); }
+    #${MENU_ID}-dialog::backdrop { background: var(--overlay-backdrop-bgColor, #c8d1da66); }
+    #${MENU_ID}-dialog h2 { margin: 0; padding: 16px 16px 8px; font-size: 16px; font-weight: 600; line-height: 24px; }
+    #${MENU_ID}-dialog p { margin: 0; padding: 0 16px 16px; font-size: 14px; line-height: 20px; }
+    #${MENU_ID}-dialog p[role=alert] { color: var(--fgColor-danger, #d1242f); }
+    #${MENU_ID}-dialog p[role=alert]:empty { display: none; }
+    .${MENU_ID}-field { display: flex; align-items: center; gap: 12px; padding: 0 16px 12px; }
+    .${MENU_ID}-field label { width: 56px; font-size: 14px; font-weight: 600; }
+    .${MENU_ID}-field select { flex: 1; height: 32px; padding: 0 8px; font: inherit; font-size: 14px; color: inherit;
+      background: var(--bgColor-default, #fff); border: 1px solid var(--borderColor-default, #d1d9e0);
+      border-radius: var(--borderRadius-medium, 6px); }
+    #${MENU_ID}-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px;
+      border-top: 1px solid var(--borderColor-muted, #d1d9e0b3); }`;
   document.head.append(style);
 }
 
@@ -184,25 +200,127 @@ function renderPrMenu() {
   list.setAttribute("role", "menu");
   list.setAttribute("aria-label", STUDIO_LABEL);
   list.hidden = true;
-  studio.addEventListener("click", () => setMenuOpen(list.hidden));
-  for (const a of ACTIONS) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.setAttribute("role", "menuitem");
-    item.textContent = a.label;
-    item.addEventListener("click", () => {
-      setMenuOpen(false);
-      runAction(m, a, studio, STUDIO_LABEL);
+  // Items are built on each open: until a worktree folder is set there is only "Set up".
+  studio.addEventListener("click", () => {
+    if (!list.hidden) return setMenuOpen(false);
+    getSettings((s) => {
+      list.replaceChildren(...(s.worktreeDir
+        ? ACTIONS.map((a) => menuItem(a.label, () => runAction(m, a, studio, STUDIO_LABEL)))
+        : [menuItem("Set up", () => openSetup(() => studio.click()))]));
+      setMenuOpen(true);
     });
-    list.append(item);
-  }
+  });
 
   const claude = makeButton(CLAUDE_LABEL);
   claude.setAttribute("aria-label", CLAUDE.label);
-  claude.addEventListener("click", () => runAction(m, CLAUDE, claude, CLAUDE_LABEL));
+  // First click asks for whatever is still missing: the worktree folder, then model and effort.
+  claude.addEventListener("click", () => getSettings((s) => {
+    const run = () => runAction(m, CLAUDE, claude, CLAUDE_LABEL);
+    const withClaude = s.claudeModel ? run : () => openClaudeSettings(run);
+    s.worktreeDir ? withClaude() : openSetup(withClaude);
+  }));
 
   root.append(studio, claude, list);
   anchor.append(root);
+}
+
+function getSettings(cb) {
+  chrome.storage.local.get(["worktreeDir", "claudeModel", "claudeEffort"], (stored) => cb(stored || {}));
+}
+
+function menuItem(text, onClick) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.setAttribute("role", "menuitem");
+  item.textContent = text;
+  item.addEventListener("click", () => {
+    setMenuOpen(false);
+    onClick();
+  });
+  return item;
+}
+
+// A GitHub-style modal: title, text, optional fields, Cancel and one primary button.
+// `onPrimary(close, showError)` does the work and calls close() when it is done.
+function openDialog({ title, text, fields = [], primary, onPrimary }) {
+  document.getElementById(`${MENU_ID}-dialog`)?.remove();
+  const dialog = document.createElement("dialog");
+  dialog.id = `${MENU_ID}-dialog`;
+  dialog.setAttribute("aria-labelledby", `${MENU_ID}-dialog-title`);
+  const heading = document.createElement("h2");
+  heading.id = `${MENU_ID}-dialog-title`;
+  heading.textContent = title;
+  const body = document.createElement("p");
+  body.textContent = text;
+  const error = document.createElement("p");
+  error.setAttribute("role", "alert");
+  const footer = document.createElement("footer");
+  const cancel = makeButton("Cancel");
+  const ok = makeButton(primary, false, "primary");
+  cancel.addEventListener("click", () => dialog.close());
+  ok.addEventListener("click", () => {
+    ok.disabled = true;
+    error.textContent = "";
+    onPrimary(() => dialog.close(), (err) => {
+      ok.disabled = false;
+      error.textContent = err;
+    });
+  });
+  footer.append(cancel, ok);
+  dialog.append(heading, body, ...fields, error, footer);
+  dialog.addEventListener("click", (e) => e.target === dialog && dialog.close()); // backdrop click
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+// First-run dialog: explains the worktree folder and lets the user pick it with the macOS folder chooser.
+function openSetup(onDone) {
+  openDialog({
+    title: "Choose a worktree folder",
+    text: "Each PR is checked out as its own git worktree, in a folder named <repo>-<branch>. "
+      + "Choose the folder these worktrees go into. You can change it later in the extension's settings.",
+    primary: "Choose folder…",
+    onPrimary: (close, showError) => send({ action: "choose_folder", current: "" }, (res, err) => {
+      if (res?.cancelled) return showError("");
+      if (err) return showError(err);
+      chrome.storage.local.set({ worktreeDir: res.path }, () => {
+        close();
+        onDone();
+      });
+    }),
+  });
+}
+
+function labeledSelect(id, text, options, value) {
+  const wrap = document.createElement("div");
+  wrap.className = `${MENU_ID}-field`;
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.textContent = text;
+  const select = document.createElement("select");
+  select.id = id;
+  fillSelect(select, options, value);
+  wrap.append(label, select);
+  return { wrap, select };
+}
+
+// First Claude click: pick the model and effort new sessions start with (changeable in the settings).
+function openClaudeSettings(onDone) {
+  getSettings((s) => {
+    const model = labeledSelect(`${MENU_ID}-model`, "Model", CLAUDE_MODELS, s.claudeModel || "default");
+    const effort = labeledSelect(`${MENU_ID}-effort`, "Effort", CLAUDE_EFFORTS, s.claudeEffort || "default");
+    openDialog({
+      title: "Claude session",
+      text: "Choose the model and effort for Claude sessions opened from PRs. You can change them later in the extension's settings.",
+      fields: [model.wrap, effort.wrap],
+      primary: "Save and open",
+      onPrimary: (close) => chrome.storage.local.set({ claudeModel: model.select.value, claudeEffort: effort.select.value }, () => {
+        close();
+        onDone();
+      }),
+    });
+  });
 }
 
 function setMenuOpen(open) {

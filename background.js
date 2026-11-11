@@ -1,8 +1,13 @@
-// Content scripts can't use native messaging, so they relay through here. The worktree folder from the settings
-// page rides along with every request.
+// Content scripts can't use native messaging, so they relay through here. The settings (worktree folder, Claude
+// model and effort) ride along with every request.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  chrome.storage.local.get("worktreeDir", (stored) => {
-    const request = { ...msg, worktreeDir: stored?.worktreeDir || "" };
+  chrome.storage.local.get(["worktreeDir", "claudeModel", "claudeEffort"], (stored) => {
+    const request = {
+      ...msg,
+      worktreeDir: stored?.worktreeDir || "",
+      claudeModel: stored?.claudeModel || "default",
+      claudeEffort: stored?.claudeEffort || "default",
+    };
     chrome.runtime.sendNativeMessage("github_pr_quick_filters", request, (res) => {
       sendResponse(chrome.runtime.lastError ? { ok: false, error: chrome.runtime.lastError.message } : res);
     });

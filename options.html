@@ -8,9 +8,11 @@
     body { font: 13px/1.5 system-ui, sans-serif; margin: 16px; min-width: 420px; }
     label { display: block; font-weight: 600; margin-bottom: 4px; }
     .row { display: flex; gap: 8px; }
-    input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; }
+    input, select { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; }
     button { padding: 5px 12px; font: inherit; }
-    .hint { margin: 6px 0 0; opacity: .75; }
+    .hint { margin: 6px 0 16px; opacity: .75; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pair select { width: 100%; }
     #status { min-height: 1.5em; margin: 8px 0 0; }
     #status.error { color: #cf222e; }
   </style>
@@ -18,11 +20,19 @@
 <body>
   <label for="dir">Worktree folder</label>
   <div class="row">
-    <input id="dir" type="text" placeholder="Next to the main clone" spellcheck="false" autocomplete="off">
+    <input id="dir" type="text" placeholder="Not set" spellcheck="false" autocomplete="off">
     <button id="browse" type="button">Choose…</button>
   </div>
-  <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Leave empty to create them next to the main clone.</p>
+  <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Until it is set, the Android Studio button only offers "Set up".</p>
+
+  <div class="pair">
+    <div><label for="model">Claude model</label><select id="model"></select></div>
+    <div><label for="effort">Claude effort</label><select id="effort"></select></div>
+  </div>
+  <p class="hint">Used when the Claude button opens a session. Until they are chosen, the first click asks for them.</p>
+
   <p id="status" role="status"></p>
+  <script src="claude-options.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

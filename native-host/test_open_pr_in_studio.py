@@ -71,6 +71,9 @@ class Validation(unittest.TestCase):
             ({"action": "rm"}, "unknown action"),
             ({"worktreeDir": "/does/not/exist"}, "does not exist"),
             ({"worktreeDir": "relative/dir"}, "does not exist"),
+            ({"action": "claude", "claudeModel": "opus; rm -rf /"}, "invalid Claude model"),
+            ({"action": "claude", "claudeModel": "../x"}, "invalid Claude model"),
+            ({"action": "claude", "claudeEffort": "ultra"}, "invalid Claude effort"),
         ]:
             with self.assertRaisesRegex(ValueError, error):
                 host.handle(dict(ok, **bad))
@@ -226,6 +229,33 @@ class Status(unittest.TestCase):
                 host.run_status(bad)
         with self.assertRaisesRegex(ValueError, "unknown run"):
             self.status("x", name="notes.txt")
+
+
+class ClaudeSettings(unittest.TestCase):
+    def test_merges_into_settings_local_and_keeps_other_keys(self):
+        wt = tempfile.mkdtemp()
+        os.makedirs(os.path.join(wt, ".claude"))
+        file = os.path.join(wt, ".claude", "settings.local.json")
+        with open(file, "w") as f:
+            json.dump({"permissions": {"allow": ["Bash(ls)"]}, "effortLevel": "low"}, f)
+        host.write_claude_settings(wt, host.claude_settings({"claudeModel": "opus[1m]", "claudeEffort": "xhigh"}))
+        with open(file) as f:
+            self.assertEqual(json.load(f), {"permissions": {"allow": ["Bash(ls)"]}, "effortLevel": "xhigh", "model": "opus[1m]"})
+
+    def test_default_leaves_settings_alone(self):
+        wt = tempfile.mkdtemp()
+        self.assertEqual(host.claude_settings({"claudeModel": "default", "claudeEffort": "default"}), {})
+        host.write_claude_settings(wt, {})
+        self.assertFalse(os.path.exists(os.path.join(wt, ".claude")))
+        self.assertEqual(host.claude_settings({"claudeModel": "sonnet"}), {"model": "sonnet"})
+
+    def test_broken_settings_file_is_not_overwritten(self):
+        wt = tempfile.mkdtemp()
+        os.makedirs(os.path.join(wt, ".claude"))
+        with open(os.path.join(wt, ".claude", "settings.local.json"), "w") as f:
+            f.write("{ not json")
+        with self.assertRaisesRegex(RuntimeError, "not valid JSON"):
+            host.write_claude_settings(wt, {"model": "opus"})
 
 
 class Claude(unittest.TestCase):

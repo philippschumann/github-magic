@@ -13,7 +13,7 @@
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],
-      "js": ["content.js"],
+      "js": ["claude-options.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
