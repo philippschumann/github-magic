@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],
-      "js": ["claude-options.js", "content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],

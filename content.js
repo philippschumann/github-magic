@@ -144,11 +144,6 @@ function addMenuStyle() {
     #${MENU_ID}-dialog p { margin: 0; padding: 0 16px 16px; font-size: 14px; line-height: 20px; }
     #${MENU_ID}-dialog p[role=alert] { color: var(--fgColor-danger, #d1242f); }
     #${MENU_ID}-dialog p[role=alert]:empty { display: none; }
-    .${MENU_ID}-field { display: flex; align-items: center; gap: 12px; padding: 0 16px 12px; }
-    .${MENU_ID}-field label { width: 56px; font-size: 14px; font-weight: 600; }
-    .${MENU_ID}-field select { flex: 1; height: 32px; padding: 0 8px; font: inherit; font-size: 14px; color: inherit;
-      background: var(--bgColor-default, #fff); border: 1px solid var(--borderColor-default, #d1d9e0);
-      border-radius: var(--borderRadius-medium, 6px); }
     #${MENU_ID}-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px;
       border-top: 1px solid var(--borderColor-muted, #d1d9e0b3); }`;
   document.head.append(style);
@@ -230,11 +225,10 @@ function renderPrMenu() {
 
   const claude = makeButton(CLAUDE_LABEL);
   claude.setAttribute("aria-label", CLAUDE.label);
-  // First click asks for whatever is still missing: the worktree folder, then model and effort.
+  // First click asks for the worktree folder if it isn't set yet.
   claude.addEventListener("click", () => getSettings((s) => {
     const run = () => runAction(m, CLAUDE, claude, CLAUDE_LABEL);
-    const withClaude = s.claudeModel ? run : () => openClaudeSettings(run);
-    s.worktreeDir ? withClaude() : openSetup(withClaude);
+    s.worktreeDir ? run() : openSetup(run);
   }));
 
   root.append(studio, claude, list);
@@ -242,7 +236,7 @@ function renderPrMenu() {
 }
 
 function getSettings(cb) {
-  chrome.storage.local.get(["worktreeDir", "claudeModel", "claudeEffort"], (stored) => cb(stored || {}));
+  chrome.storage.local.get("worktreeDir", (stored) => cb(stored || {}));
 }
 
 function menuItem(text, onClick) {
@@ -257,9 +251,9 @@ function menuItem(text, onClick) {
   return item;
 }
 
-// A GitHub-style modal: title, text, optional fields, Cancel and one primary button.
+// A GitHub-style modal: title, text, Cancel and one primary button.
 // `onPrimary(close, showError)` does the work and calls close() when it is done.
-function openDialog({ title, text, fields = [], primary, onPrimary }) {
+function openDialog({ title, text, primary, onPrimary }) {
   document.getElementById(`${MENU_ID}-dialog`)?.remove();
   const dialog = document.createElement("dialog");
   dialog.id = `${MENU_ID}-dialog`;
@@ -284,7 +278,7 @@ function openDialog({ title, text, fields = [], primary, onPrimary }) {
     });
   });
   footer.append(cancel, ok);
-  dialog.append(heading, body, ...fields, error, footer);
+  dialog.append(heading, body, error, footer);
   dialog.addEventListener("click", (e) => e.target === dialog && dialog.close()); // backdrop click
   dialog.addEventListener("close", () => dialog.remove());
   document.body.append(dialog);
@@ -306,37 +300,6 @@ function openSetup(onDone) {
         onDone();
       });
     }),
-  });
-}
-
-function labeledSelect(id, text, options, value) {
-  const wrap = document.createElement("div");
-  wrap.className = `${MENU_ID}-field`;
-  const label = document.createElement("label");
-  label.htmlFor = id;
-  label.textContent = text;
-  const select = document.createElement("select");
-  select.id = id;
-  fillSelect(select, options, value);
-  wrap.append(label, select);
-  return { wrap, select };
-}
-
-// First Claude click: pick the model and effort new sessions start with (changeable in the settings).
-function openClaudeSettings(onDone) {
-  getSettings((s) => {
-    const model = labeledSelect(`${MENU_ID}-model`, "Model", CLAUDE_MODELS, s.claudeModel || "default");
-    const effort = labeledSelect(`${MENU_ID}-effort`, "Effort", CLAUDE_EFFORTS, s.claudeEffort || "default");
-    openDialog({
-      title: "Claude session",
-      text: "Choose the model and effort for Claude sessions opened from PRs. You can change them later in the extension's settings.",
-      fields: [model.wrap, effort.wrap],
-      primary: "Save and open",
-      onPrimary: (close) => chrome.storage.local.set({ claudeModel: model.select.value, claudeEffort: effort.select.value }, () => {
-        close();
-        onDone();
-      }),
-    });
   });
 }
 

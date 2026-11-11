@@ -37,12 +37,7 @@ Every action first checks the PR out as a git worktree named `<repo>-<branch>` i
 
 ## First use
 
-The first time you use the buttons, they ask for what's missing:
-
-- the folder new worktrees go in (Android Studio shows only "Set up" until it's chosen)
-- the Claude model and effort (asked on the first Claude click)
-
-You can change all three later in the extension's settings (click the extension icon, or Chrome: Details → Extension options; Firefox: about:addons → Preferences).
+The first time you use the buttons, they ask for the folder new worktrees go in (Android Studio shows only "Set up" until it's chosen). You can change it later in the extension's settings (click the extension icon, or Chrome: Details → Extension options; Firefox: about:addons → Preferences).
 
 ## What the actions do
 
@@ -54,7 +49,7 @@ You can change all three later in the extension's settings (click the extension 
   - A new run cancels the one still going on that device, whatever PR it was for.
   - If the device refuses the build as a downgrade or because of a different signing key, the app is uninstalled and installed again, which wipes its data.
   - Logs: `~/Library/Logs/github-pr-quick-filters/`.
-- **Claude:** writes the chosen model and effort into the worktree's `.claude/settings.local.json`, then reopens the newest unarchived session in that folder or starts a new one.
+- **Claude:** reopens the newest unarchived session in that folder or starts a new one.
 
 The app id, start activity, emulator and phone order are constants at the top of the helper script.
 

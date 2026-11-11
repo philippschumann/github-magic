@@ -12,20 +12,8 @@ function save() {
   chrome.storage.local.set({ worktreeDir }, () => show(worktreeDir ? "Saved" : "Saved: not set"));
 }
 
-const model = document.getElementById("model");
-const effort = document.getElementById("effort");
-
-chrome.storage.local.get(["worktreeDir", "claudeModel", "claudeEffort"], (stored) => {
-  input.value = stored?.worktreeDir || "";
-  fillSelect(model, CLAUDE_MODELS, stored?.claudeModel || "default");
-  fillSelect(effort, CLAUDE_EFFORTS, stored?.claudeEffort || "default");
-});
+chrome.storage.local.get("worktreeDir", (stored) => { input.value = stored?.worktreeDir || ""; });
 input.addEventListener("change", save);
-// Saving both marks the Claude choice as made, so the PR page stops asking on first click.
-for (const select of [model, effort]) {
-  select.addEventListener("change", () =>
-    chrome.storage.local.set({ claudeModel: model.value, claudeEffort: effort.value }, () => show("Saved")));
-}
 
 // The browser's own pickers never reveal an absolute path, so the native host shows the macOS folder dialog.
 browse.addEventListener("click", () => {

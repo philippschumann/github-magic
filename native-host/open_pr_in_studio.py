@@ -85,42 +85,6 @@ def update(path, repo, pr):
     run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
 
 
-CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
-CLAUDE_MODEL = re.compile(r"^[a-z0-9][a-z0-9.-]*(\[[a-z0-9]+\])?$")  # an alias like "opus[1m]" or a full model id
-
-
-def claude_settings(msg):
-    """The model and effort from the extension's settings; "default" means leave that setting alone."""
-    model, effort = msg.get("claudeModel") or "default", msg.get("claudeEffort") or "default"
-    if model != "default" and not (isinstance(model, str) and CLAUDE_MODEL.match(model)):
-        raise ValueError(f"invalid Claude model: {model!r}")
-    if effort != "default" and effort not in CLAUDE_EFFORTS:
-        raise ValueError(f"invalid Claude effort: {effort!r}")
-    return {k: v for k, v in (("model", model), ("effortLevel", effort)) if v != "default"}
-
-
-def write_claude_settings(path, settings):
-    """Merge the model/effort into the worktree's .claude/settings.local.json, which sessions there start with."""
-    if not settings:
-        return
-    file = os.path.join(path, ".claude", "settings.local.json")
-    try:
-        with open(file) as f:
-            current = json.load(f)
-    except FileNotFoundError:
-        current = {}
-    except ValueError:
-        raise RuntimeError(f"{file} is not valid JSON; fix or delete it")
-    if not isinstance(current, dict):
-        raise RuntimeError(f"{file} is not a JSON object; fix or delete it")
-    current.update(settings)
-    os.makedirs(os.path.dirname(file), exist_ok=True)
-    with open(file + ".tmp", "w") as f:
-        json.dump(current, f, indent=2)
-        f.write("\n")
-    os.replace(file + ".tmp", file)
-
-
 def open_claude(path, prompt):
     """Reopen the newest unarchived Claude desktop session in this folder, else a new session's composer there."""
     best = None
@@ -241,7 +205,6 @@ def handle(msg):
         raise ValueError(f"unknown action: {action!r}")
     root = os.path.expanduser(REPOS[repo])
     base_dir = worktree_dir(msg.get("worktreeDir"))
-    claude = claude_settings(msg) if action == "claude" else None
 
     info = json.loads(run("gh", "pr", "view", str(pr), "--repo", repo, "--json", "headRefName,title"))
     path = ensure_worktree(root, repo, pr, info["headRefName"], base_dir)
@@ -249,7 +212,6 @@ def handle(msg):
         run(*OPEN, path)  # returns at once, so Android Studio loads the project while the update runs
         update(path, repo, pr)
     elif action == "claude":
-        write_claude_settings(path, claude)
         open_claude(path, f"{info['title']} (#{pr}): ")
     else:
         update(path, repo, pr)
