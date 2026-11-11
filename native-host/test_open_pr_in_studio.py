@@ -4,8 +4,12 @@
 import importlib.util
 import json
 import os
+import signal
 import stat
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 spec = importlib.util.spec_from_file_location("host", os.path.join(os.path.dirname(os.path.abspath(__file__)), "open_pr_in_studio.py"))
@@ -120,6 +124,59 @@ class Launch(Fixture):
         with self.assertRaisesRegex(RuntimeError, "installDebug failed"):
             host.launch("phone", worktree)
         self.assertFalse(any("uninstall" in c for c in self.calls(self.tools)))
+
+
+class Worktrees(unittest.TestCase):
+    def test_existing_worktree_gets_missing_local_properties_but_keeps_its_own(self):
+        tmp = tempfile.mkdtemp()
+        root = os.path.join(tmp, "App")
+        for cmd in (["git", "init", "-q", "-b", "main", root],
+                    ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+                    ["git", "-C", root, "worktree", "add", "-q", "-b", "feat/a", os.path.join(tmp, "elsewhere")],
+                    ["git", "-C", root, "worktree", "add", "-q", "-b", "feat/b", os.path.join(tmp, "own")]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        with open(os.path.join(root, "local.properties"), "w") as f:
+            f.write("sdk.dir=/main\n")
+        with open(os.path.join(tmp, "own", "local.properties"), "w") as f:
+            f.write("sdk.dir=/own\n")
+
+        path = host.ensure_worktree(root, "o/r", 1, "feat/a", None)
+        self.assertEqual(path, os.path.realpath(os.path.join(tmp, "elsewhere")))
+        with open(os.path.join(path, "local.properties")) as f:
+            self.assertEqual(f.read(), "sdk.dir=/main\n")
+        path = host.ensure_worktree(root, "o/r", 2, "feat/b", None)
+        with open(os.path.join(path, "local.properties")) as f:
+            self.assertEqual(f.read(), "sdk.dir=/own\n")
+
+
+class Cancel(unittest.TestCase):
+    def setUp(self):
+        self.orig = host.LOG_DIR
+        host.LOG_DIR = tempfile.mkdtemp()
+
+    def tearDown(self):
+        host.LOG_DIR = self.orig
+
+    def spawn(self, *args):
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", *args], start_new_session=True)
+        with open(os.path.join(host.LOG_DIR, "phone.pid"), "w") as f:
+            f.write(str(p.pid))
+        return p
+
+    def test_new_run_kills_the_previous_one(self):
+        p = self.spawn("--launch", "phone", "open_pr_in_studio.py")
+        host.cancel_previous("phone")
+        self.assertEqual(p.wait(timeout=5), -signal.SIGTERM)
+
+    def test_reused_pid_of_another_process_is_left_alone(self):
+        p = self.spawn("unrelated")
+        host.cancel_previous("phone")
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+        p.kill()
+
+    def test_no_previous_run(self):
+        host.cancel_previous("emulator")  # no pid file: nothing to do
 
 
 class Claude(unittest.TestCase):

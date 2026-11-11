@@ -136,11 +136,11 @@ function renderPrMenu() {
   anchor.append(root);
 }
 
-// Close the menu on outside click or Escape.
+// Close the menu on outside click or Escape. Capture phase: GitHub's own handlers stop some clicks from bubbling.
 document.addEventListener("click", (e) => {
   const menu = document.querySelector(`#${MENU_ID} details`);
   if (menu?.open && !menu.contains(e.target)) menu.open = false;
-});
+}, true);
 document.addEventListener("keydown", (e) => {
   const menu = document.querySelector(`#${MENU_ID} details`);
   if (e.key === "Escape" && menu?.open) {

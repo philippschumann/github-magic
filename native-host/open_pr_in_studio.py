@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -59,20 +60,21 @@ def worktree_for_branch(root, branch):
 def ensure_worktree(root, repo, pr, branch, base_dir):
     # Branch already checked out (main clone or another worktree): use that instead of a second copy.
     path = worktree_for_branch(root, branch)
-    if path:
-        return os.path.realpath(path)
-    name = f"{os.path.basename(root)}-{branch.replace('/', '-')}"
-    path = os.path.join(base_dir, name) if base_dir else os.path.join(os.path.dirname(root), name)
-    if not os.path.exists(path):
-        run("git", "-C", root, "worktree", "add", "--detach", path)
-        try:
-            run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
-        except Exception:
-            run("git", "-C", root, "worktree", "remove", "--force", path)
-            raise
-        for name in COPY_FILES:
-            if os.path.exists(os.path.join(root, name)):
-                shutil.copy2(os.path.join(root, name), os.path.join(path, name))
+    if not path:
+        name = f"{os.path.basename(root)}-{branch.replace('/', '-')}"
+        path = os.path.join(base_dir, name) if base_dir else os.path.join(os.path.dirname(root), name)
+        if not os.path.exists(path):
+            run("git", "-C", root, "worktree", "add", "--detach", path)
+            try:
+                run("gh", "pr", "checkout", str(pr), "--repo", repo, cwd=path)
+            except Exception:
+                run("git", "-C", root, "worktree", "remove", "--force", path)
+                raise
+    # Worktrees made elsewhere (by hand) can lack these too; an existing copy is never overwritten.
+    for name in COPY_FILES:
+        src, dst = os.path.join(root, name), os.path.join(path, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
     # Android Studio and the Claude app match folders by resolved path; same path = same window/session.
     return os.path.realpath(path)
 
@@ -99,13 +101,33 @@ def open_claude(path, prompt):
     run("open", url)
 
 
+def cancel_previous(target):
+    """Stop the run still going on this target (any PR), so a new click starts fresh."""
+    try:
+        with open(os.path.join(LOG_DIR, f"{target}.pid")) as f:
+            pid = int(f.read())
+    except (OSError, ValueError):
+        return
+    # The pid may have been reused by an unrelated process since; only touch one of our own runs.
+    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+    if "--launch" in cmd and os.path.basename(__file__) in cmd:
+        try:
+            # Each run leads its own process group: this ends the gradle client too, and its daemon cancels the build.
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 def start_launch(target, path, branch):
     os.makedirs(LOG_DIR, exist_ok=True)
+    cancel_previous(target)
     log = os.path.join(LOG_DIR, f"{branch.replace('/', '-')}-{target}.log")
     with open(log, "w") as out:
         # New session: the browser may kill the host's process group once it has replied.
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path],
-                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path],
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    with open(os.path.join(LOG_DIR, f"{target}.pid"), "w") as f:
+        f.write(str(proc.pid))
     return log
 
 
