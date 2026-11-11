@@ -14,3 +14,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   });
   return true; // keep sendResponse alive for the async reply
 });
+
+// Without a popup, clicking the toolbar / extensions-menu entry fires this.
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());

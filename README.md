@@ -42,7 +42,7 @@ The first time you use the buttons, they ask for what's missing:
 - the folder new worktrees go in (Android Studio shows only "Set up" until it's chosen)
 - the Claude model and effort (asked on the first Claude click)
 
-You can change all three later in the extension's settings (Chrome: Details → Extension options; Firefox: about:addons → Preferences).
+You can change all three later in the extension's settings (click the extension icon, or Chrome: Details → Extension options; Firefox: about:addons → Preferences).
 
 ## What the actions do
 
