@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>GitHub PR Quick Filters settings</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 13px/1.5 system-ui, sans-serif; margin: 16px; min-width: 420px; }
+    label { display: block; font-weight: 600; margin-bottom: 4px; }
+    .row { display: flex; gap: 8px; }
+    input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; }
+    button { padding: 5px 12px; font: inherit; }
+    .hint { margin: 6px 0 0; opacity: .75; }
+    #status { min-height: 1.5em; margin: 8px 0 0; }
+    #status.error { color: #cf222e; }
+  </style>
+</head>
+<body>
+  <label for="dir">Worktree folder</label>
+  <div class="row">
+    <input id="dir" type="text" placeholder="Next to the main clone" spellcheck="false" autocomplete="off">
+    <button id="browse" type="button">Choose…</button>
+  </div>
+  <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Leave empty to create them next to the main clone.</p>
+  <p id="status" role="status"></p>
+  <script src="options.js"></script>
+</body>
+</html>
