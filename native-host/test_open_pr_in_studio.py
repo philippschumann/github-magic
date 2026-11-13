@@ -22,10 +22,17 @@ echo "$*" >> "$d/calls.log"
 case "$*" in
   "devices -l") cat "$d/devices_l.txt" ;;
   "devices") cat "$d/devices.txt" ;;
-  *"emu avd name") printf 'Pixel_9_API_35\\r\\nOK\\r\\n' ;;
+  *"emu avd name") printf '%s\\r\\nOK\\r\\n' "$(cat "$d/$2.avd" 2>/dev/null || echo Pixel_9_API_35)" ;;
   *"getprop sys.boot_completed") echo 1 ;;
   *"pm path android") echo package:/system/framework/framework-res.apk ;;
 esac
+"""
+# Comes up as emulator-5556 running the AVD it was asked for, next to a running emulator-5554.
+FAKE_EMULATOR = """#!/bin/sh
+t="$(dirname "$0")/../platform-tools"
+echo "$2" > "$t/emulator-5556.avd"
+printf 'List of devices attached\\nemulator-5554\\tdevice\\nemulator-5556\\tdevice\\n' > "$t/devices.txt"
+sleep 5
 """
 # Fails like a downgrade on the first run, succeeds on the second.
 FAKE_GRADLEW = """#!/bin/sh
@@ -75,6 +82,8 @@ class Validation(unittest.TestCase):
             ({"branch": None}, "can't check out"),
             ({"worktreeDir": "/does/not/exist"}, "does not exist"),
             ({"worktreeDir": "relative/dir"}, "does not exist"),
+            ({"ide": "Notepad"}, "not installed"),
+            ({"ide": "/Applications/Calculator.app"}, "not installed"),
         ]:
             with self.assertRaisesRegex(ValueError, error):
                 host.handle(dict(ok, **bad))
@@ -83,24 +92,77 @@ class Validation(unittest.TestCase):
 class Update(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.orig = host.run, host.ensure_worktree, host.update, host.start_launch
+        self.orig = host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR
         host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd[:3]))
         host.ensure_worktree = lambda *a: "/wt"
         host.update = lambda *a: self.calls.append("update")
-        host.start_launch = lambda *a: self.calls.append("launch") or "/log"
+        host.start_launch = lambda target, path, branch, avd: self.calls.append(f"launch {avd}".strip()) or "/log"
+        host.installed_ides = lambda: {"IntelliJ IDEA": "/Applications/IntelliJ IDEA CE.app"}
+        host.AVD_DIR = tempfile.mkdtemp()
+        open(os.path.join(host.AVD_DIR, "Medium_Phone.ini"), "w").close()
 
     def tearDown(self):
-        host.run, host.ensure_worktree, host.update, host.start_launch = self.orig
+        host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR = self.orig
 
-    def act(self, action):
-        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a"})
+    def act(self, action, **msg):
+        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a",
+                     "ide": "IntelliJ IDEA", **msg})
         return self.calls
 
-    def test_open_starts_android_studio_then_updates(self):
-        self.assertEqual(self.act("open"), ["open -a Android Studio", "update"])
+    def test_open_starts_the_chosen_ide_then_updates(self):
+        self.assertEqual(self.act("open"), ["open -a /Applications/IntelliJ IDEA CE.app", "update"])
 
     def test_device_run_updates_before_installing(self):
         self.assertEqual(self.act("phone"), ["update", "launch"])
+
+    def test_emulator_run_uses_the_chosen_emulator(self):
+        self.assertEqual(self.act("emulator", emulator="Medium_Phone"), ["update", "launch Medium_Phone"])
+
+    def test_unknown_or_missing_emulator_is_rejected_before_anything_runs(self):
+        for name in ["-wipe-data", "", None]:
+            with self.assertRaisesRegex(ValueError, "not found"):
+                self.act("emulator", emulator=name)
+        self.assertEqual(self.calls, [])
+
+
+class Detect(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.orig = host.APP_DIRS, host.REPOS, host.AVD_DIR
+        host.AVD_DIR = os.path.join(self.tmp, "avd")
+        host.APP_DIRS = [os.path.join(self.tmp, "Applications"), os.path.join(self.tmp, "home", "Applications")]
+        host.REPOS = {"o/r": os.path.join(self.tmp, "clone")}
+        os.makedirs(os.path.join(self.tmp, "clone"))
+
+    def tearDown(self):
+        host.APP_DIRS, host.REPOS, host.AVD_DIR = self.orig
+
+    def test_lists_installed_ides_in_order_with_their_app(self):
+        for app in ["home/Applications/IntelliJ IDEA CE.app", "Applications/Visual Studio Code.app", "Applications/Xcode.app"]:
+            os.makedirs(os.path.join(self.tmp, app))
+        self.assertEqual(host.installed_ides(), {
+            "IntelliJ IDEA": os.path.join(self.tmp, "home/Applications/IntelliJ IDEA CE.app"),
+            "VS Code": os.path.join(self.tmp, "Applications/Visual Studio Code.app"),
+        })
+        self.assertEqual(host.handle({"action": "detect"})["ides"], ["IntelliJ IDEA", "VS Code"])
+
+    def test_lists_emulators_by_their_ini_files(self):
+        self.assertEqual(host.detect(None)["avds"], [])  # no AVD folder
+        for name in ["Pixel_9_API_35.ini", "Pixel_9_API_35.avd/config.ini", "Medium_Phone_API_36.1.ini", "gradle-managed/x"]:
+            os.makedirs(os.path.dirname(os.path.join(host.AVD_DIR, name)), exist_ok=True)
+            open(os.path.join(host.AVD_DIR, name), "w").close()
+        self.assertEqual(host.handle({"action": "detect"})["avds"], ["Medium_Phone_API_36.1", "Pixel_9_API_35"])
+
+    def test_adb_only_when_the_repos_sdk_has_it(self):
+        self.assertFalse(host.detect("o/r")["adb"])  # no local.properties
+        with open(os.path.join(self.tmp, "clone", "local.properties"), "w") as f:
+            f.write(f"sdk.dir={os.path.join(self.tmp, 'sdk')}\n")
+        self.assertFalse(host.detect("o/r")["adb"])  # sdk without platform-tools
+        os.makedirs(os.path.join(self.tmp, "sdk", "platform-tools"))
+        write_exe(os.path.join(self.tmp, "sdk", "platform-tools", "adb"), "#!/bin/sh\n")
+        self.assertTrue(host.detect("o/r")["adb"])
+        self.assertFalse(host.detect("evil/repo")["adb"])
+        self.assertFalse(host.detect(None)["adb"])
 
 
 class Devices(Fixture):
@@ -123,7 +185,16 @@ class Devices(Fixture):
     def test_running_emulator_is_reused(self):
         # No emulator binary in the fake SDK: booting one would fail, so this passes only without a boot.
         self.devices([], ["emulator-5556\tdevice"])
-        self.assertEqual(host.emulator_serial(self.adb, os.path.join(self.tmp, "sdk")), "emulator-5556")
+        self.assertEqual(host.emulator_serial(self.adb, os.path.join(self.tmp, "sdk"), "Pixel_9_API_35"), "emulator-5556")
+
+    def test_chosen_emulator_is_booted_when_another_one_runs(self):
+        self.addCleanup(setattr, host, "LOG_DIR", host.LOG_DIR)
+        host.LOG_DIR = self.tmp
+        os.makedirs(os.path.join(self.tmp, "sdk", "emulator"))
+        write_exe(os.path.join(self.tmp, "sdk", "emulator", "emulator"), FAKE_EMULATOR)
+        self.devices([], ["emulator-5554\tdevice"])  # running Pixel_9_API_35
+        self.assertEqual(host.emulator_serial(self.adb, os.path.join(self.tmp, "sdk"), "Medium_Phone"), "emulator-5556")
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "Medium_Phone.log")))
 
 
 class Launch(Fixture):
@@ -135,7 +206,7 @@ class Launch(Fixture):
         write_exe(os.path.join(worktree, "gradlew"), FAKE_GRADLEW)
         self.devices(["PHONE1 device usb:1 model:Pixel_6"])
 
-        self.assertEqual(host.launch("phone", worktree), "PHONE1")
+        self.assertEqual(host.launch("phone", worktree, ""), "PHONE1")
         self.assertEqual(self.calls(worktree), ["gradlew :app:installDebug serial=PHONE1"] * 2)
         adb_calls = self.calls(self.tools)
         self.assertIn(f"-s PHONE1 uninstall {host.APP_ID}", adb_calls)
@@ -149,7 +220,7 @@ class Launch(Fixture):
         write_exe(os.path.join(worktree, "gradlew"), "#!/bin/sh\necho 'compilation failed'; exit 1\n")
         self.devices(["PHONE1 device usb:1 model:Pixel_6"])
         with self.assertRaisesRegex(RuntimeError, "installDebug failed"):
-            host.launch("phone", worktree)
+            host.launch("phone", worktree, "")
         self.assertFalse(any("uninstall" in c for c in self.calls(self.tools)))
 
 
@@ -252,7 +323,7 @@ class Cancel(unittest.TestCase):
             f.write(f"sdk.dir={os.path.join(tmp, 'sdk')}\n")
         write_exe(os.path.join(worktree, "gradlew"), "#!/bin/sh\nsleep 30\n")  # a long build
 
-        log = host.start_launch("phone", worktree, "feat/a")
+        log = host.start_launch("phone", worktree, "feat/a", "")
         time.sleep(1.5)
         self.assertEqual(host.run_status(log)["state"], "running")
         host.cancel_previous("phone")

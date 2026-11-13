@@ -9,6 +9,7 @@
     label { display: block; font-weight: 600; margin-bottom: 4px; }
     .row { display: flex; gap: 8px; }
     input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; }
+    select { padding: 5px 8px; font: inherit; }
     button { padding: 5px 12px; font: inherit; }
     .hint { margin: 6px 0 16px; opacity: .75; }
     #status { min-height: 1.5em; margin: 8px 0 0; }
@@ -21,7 +22,15 @@
     <input id="dir" type="text" placeholder="Not set" spellcheck="false" autocomplete="off">
     <button id="browse" type="button">Choose…</button>
   </div>
-  <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Until it is set, the Android Studio button only offers "Set up".</p>
+  <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Until it is set, the IDE button only offers "Set up".</p>
+
+  <label for="ide">IDE</label>
+  <select id="ide"><option value="">Not chosen</option></select>
+  <p class="hint">"Open in" uses this IDE. Only installed IDEs are listed. Until one is chosen, the IDE button asks.</p>
+
+  <label for="emulator">Emulator</label>
+  <select id="emulator"><option value="">Not chosen</option></select>
+  <p class="hint">"Run on emulator" uses this emulator and boots it if it isn't running. Until one is chosen, it asks.</p>
 
   <p id="status" role="status"></p>
   <script src="options.js"></script>

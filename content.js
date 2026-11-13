@@ -48,14 +48,15 @@ function render() {
   anchor.after(bar);
 }
 
-// PR page actions: an "Android Studio" dropdown and a "Claude" button. The native host (native-host/) checks the
-// PR out in a worktree and acts on it.
+// PR page actions: an IDE dropdown and a "Claude" button. The native host (native-host/) checks the PR out in a
+// worktree and acts on it.
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
-const STUDIO_LABEL = "Android Studio";
-const ACTIONS = [
-  // Quiet: leaves the button as it is, so a running phone/emulator install keeps showing "Installing…".
-  { action: "open", label: "Open in Android Studio", quiet: true },
+const IDE_LABEL = "IDE"; // the dropdown's label until an IDE is chosen, then that IDE's name
+// Quiet: leaves the button as it is, so a running phone/emulator install keeps showing "Installing…".
+const OPEN = { action: "open", quiet: true }; // labelled "Open in <IDE>"
+// Shown only when the native host finds adb; "Run on emulator" also needs an emulator.
+const RUNS = [
   // Phone/emulator runs continue in the background; the button polls until the app is installed and started.
   { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed", poll: true },
   { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed", poll: true },
@@ -144,6 +145,9 @@ function addMenuStyle() {
     #${MENU_ID}-dialog p { margin: 0; padding: 0 16px 16px; font-size: 14px; line-height: 20px; }
     #${MENU_ID}-dialog p[role=alert] { color: var(--fgColor-danger, #d1242f); }
     #${MENU_ID}-dialog p[role=alert]:empty { display: none; }
+    #${MENU_ID}-dialog fieldset { margin: 0; padding: 0 16px 16px; border: 0; }
+    #${MENU_ID}-dialog label { display: flex; align-items: center; gap: 8px; padding: 4px 0;
+      font-size: 14px; line-height: 20px; cursor: pointer; }
     #${MENU_ID}-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px;
       border-top: 1px solid var(--borderColor-muted, #d1d9e0b3); }`;
   document.head.append(style);
@@ -211,22 +215,48 @@ function renderPrMenu() {
   root.id = MENU_ID;
   root.dataset.pr = key;
 
-  const studio = makeButton(STUDIO_LABEL, true);
+  const studio = makeButton(IDE_LABEL, true);
   studio.setAttribute("aria-haspopup", "menu");
   studio.setAttribute("aria-expanded", "false");
+  getSettings((s) => { if (s.ide) studio.label.textContent = s.ide; });
   const list = document.createElement("div");
   list.setAttribute("role", "menu");
-  list.setAttribute("aria-label", STUDIO_LABEL);
+  list.setAttribute("aria-label", IDE_LABEL);
   list.hidden = true;
-  // Items are built on each open: until a worktree folder is set there is only "Set up".
+  // Items are built on each open from what is installed now: until a worktree folder is set there is only "Set up".
   studio.addEventListener("click", () => {
     if (!list.hidden) return setMenuOpen(false);
-    getSettings((s) => {
+    getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
+      if (err) return alert(err);
+      const ide = found.ides.includes(s.ide) ? s.ide : null;
+      // First click, or the chosen IDE was uninstalled: ask which one to use, then open the menu.
+      if (!ide && found.ides.length) {
+        return choose("ide", found.ides, {
+          title: "Choose your IDE",
+          text: "PRs open in this IDE. You can change it later in the extension's settings.",
+          primary: "Use this IDE",
+        }, (chosen) => {
+          studio.label.textContent = chosen;
+          studio.click();
+        });
+      }
+      const runs = found.adb ? RUNS.filter((a) => a.action !== "emulator" || found.avds.length) : [];
+      const actions = [...(ide ? [{ ...OPEN, label: `Open in ${ide}` }] : []), ...runs];
+      if (!actions.length) return alert("Found no Android Studio, IntelliJ IDEA, VS Code or adb.");
+      const run = (a) => runAction(m, a, studio, ide ?? IDE_LABEL);
       list.replaceChildren(...(s.worktreeDir
-        ? ACTIONS.map((a) => menuItem(a.label, () => runAction(m, a, studio, STUDIO_LABEL)))
+        ? actions.map((a) => menuItem(a.label, () => {
+          // First run on an emulator, or the chosen one was deleted: ask which one to use, then run.
+          if (a.action !== "emulator" || found.avds.includes(s.emulator)) return run(a);
+          choose("emulator", found.avds, {
+            title: "Choose an emulator",
+            text: "Run on emulator installs the PR on this emulator. You can change it later in the extension's settings.",
+            primary: "Use this emulator",
+          }, () => run(a));
+        }))
         : [menuItem("Set up", () => openSetup(() => studio.click()))]));
       setMenuOpen(true);
-    });
+    }));
   });
 
   const claude = makeButton(CLAUDE_LABEL);
@@ -242,7 +272,7 @@ function renderPrMenu() {
 }
 
 function getSettings(cb) {
-  chrome.storage.local.get("worktreeDir", (stored) => cb(stored || {}));
+  chrome.storage.local.get(["worktreeDir", "ide", "emulator"], (stored) => cb(stored || {}));
 }
 
 function menuItem(text, onClick) {
@@ -257,9 +287,9 @@ function menuItem(text, onClick) {
   return item;
 }
 
-// A GitHub-style modal: title, text, Cancel and one primary button.
+// A GitHub-style modal: title, text, optional `content` element, Cancel and one primary button.
 // `onPrimary(close, showError)` does the work and calls close() when it is done.
-function openDialog({ title, text, primary, onPrimary }) {
+function openDialog({ title, text, content, primary, onPrimary }) {
   document.getElementById(`${MENU_ID}-dialog`)?.remove();
   const dialog = document.createElement("dialog");
   dialog.id = `${MENU_ID}-dialog`;
@@ -284,7 +314,7 @@ function openDialog({ title, text, primary, onPrimary }) {
     });
   });
   footer.append(cancel, ok);
-  dialog.append(heading, body, error, footer);
+  dialog.append(...[heading, body, content, error, footer].filter(Boolean));
   dialog.addEventListener("click", (e) => e.target === dialog && dialog.close()); // backdrop click
   dialog.addEventListener("close", () => dialog.remove());
   document.body.append(dialog);
@@ -306,6 +336,31 @@ function openSetup(onDone) {
         onDone();
       });
     }),
+  });
+}
+
+// First-run dialog: pick one of `options` (installed IDEs, emulators) and save it as the `key` setting.
+function choose(key, options, { title, text, primary }, onDone) {
+  const choices = document.createElement("fieldset");
+  choices.setAttribute("aria-label", title);
+  choices.append(...options.map((option, i) => {
+    const label = document.createElement("label");
+    const radio = Object.assign(document.createElement("input"), { type: "radio", name: key, value: option, checked: i === 0 });
+    label.append(radio, option);
+    return label;
+  }));
+  openDialog({
+    title,
+    text,
+    content: choices,
+    primary,
+    onPrimary: (close) => {
+      const value = choices.querySelector("input:checked").value;
+      chrome.storage.local.set({ [key]: value }, () => {
+        close();
+        onDone(value);
+      });
+    },
   });
 }
 

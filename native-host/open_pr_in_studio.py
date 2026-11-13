@@ -1,9 +1,11 @@
 #!/usr/bin/python3
-"""Native messaging host: checks out a GitHub PR in a sibling git worktree, then opens it in Android Studio,
+"""Native messaging host: checks out a GitHub PR in a sibling git worktree, then opens it in an IDE,
 runs it on a phone or emulator, or opens a Claude desktop session there.
 
-Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|claude", "branch": ..., "title": ...}
-from the browser extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or {"ok": false, "error": ...}. Only repos listed in REPOS are accepted.
+Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|claude", "branch": ..., "title": ...,
+"ide": "<IDES key>", "emulator": "<AVD name>"} from the browser extension, which reads the PR's branch and title from
+the page. Replies {"ok": true, "path": ...} or {"ok": false, "error": ...}. Only repos listed in REPOS are accepted.
+{"action": "detect"} lists the installed IDEs, the emulators and whether the repo's Android SDK has adb.
 Phone and emulator runs take minutes: they continue in a background process (this script with --launch)
 that reports through a macOS notification and logs to LOG_DIR.
 """
@@ -24,14 +26,20 @@ REPOS = {
 }
 # gitignored files a fresh worktree needs to build.
 COPY_FILES = ["local.properties"]
-OPEN = ["open", "-a", "Android Studio"]
+# IDE name -> app bundles to look for in APP_DIRS; the first one found is opened.
+IDES = {
+    "Android Studio": ["Android Studio.app"],
+    "IntelliJ IDEA": ["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app", "IntelliJ IDEA CE.app"],
+    "VS Code": ["Visual Studio Code.app"],
+}
+APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]  # ~/Applications: JetBrains Toolbox installs
 ACTIONS = ("open", "phone", "emulator", "claude")
 
 # Device runs.
 APP_ID = "com.example.myapp"
 START_ACTIVITY = APP_ID + "/com.example.myapp.MainActivity"
 PHONE_MODELS = ["model:Pixel_10", "model:Pixel_6"]  # preferred in this order, else any other phone
-AVD = "Pixel_9_API_35"
+AVD_DIR = os.path.expanduser("~/.android/avd")  # each emulator has a <name>.ini here
 BOOT_TIMEOUT = 300
 LOG_DIR = os.path.expanduser("~/Library/Logs/github-pr-quick-filters")
 SESSIONS_DIR = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions")
@@ -135,13 +143,13 @@ def cancel_previous(target):
             pass
 
 
-def start_launch(target, path, branch):
+def start_launch(target, path, branch, avd):
     os.makedirs(LOG_DIR, exist_ok=True)
     cancel_previous(target)
     log = os.path.join(LOG_DIR, f"{branch.replace('/', '-')}-{target}.log")
     with open(log, "w") as out:
         # New session: the browser may kill the host's process group once it has replied.
-        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path],
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path, avd],
                                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     with open(os.path.join(LOG_DIR, f"{target}.pid"), "w") as f:
         json.dump({"pid": proc.pid, "log": log}, f)
@@ -186,6 +194,33 @@ def choose_folder(current):
     return {"ok": True, "path": p.stdout.strip().rstrip("/") or "/"}
 
 
+def installed_ides():
+    """Installed IDEs as name -> app bundle path."""
+    found = {}
+    for name, apps in IDES.items():
+        path = next((p for p in (os.path.join(d, a) for a in apps for d in APP_DIRS) if os.path.isdir(p)), None)
+        if path:
+            found[name] = path
+    return found
+
+
+def avds():
+    """Emulator names. Read from AVD_DIR, which needs no repo or SDK path, so the settings page can list them too."""
+    try:
+        return sorted(name[:-len(".ini")] for name in os.listdir(AVD_DIR) if name.endswith(".ini"))
+    except OSError:
+        return []
+
+
+def detect(repo):
+    """Installed IDEs, emulators, and whether adb is in the repo's Android SDK (sdk.dir), which phone/emulator runs use."""
+    try:
+        adb = os.access(os.path.join(sdk_dir(os.path.expanduser(REPOS[repo])), "platform-tools", "adb"), os.X_OK)
+    except (KeyError, TypeError, OSError, RuntimeError):
+        adb = False
+    return {"ok": True, "ides": list(installed_ides()), "avds": avds(), "adb": adb}
+
+
 def worktree_dir(value):
     if not value:
         return None  # default: next to the main clone
@@ -201,6 +236,8 @@ def handle(msg):
         return choose_folder(msg.get("current"))
     if action == "status":
         return run_status(msg.get("log"))
+    if action == "detect":
+        return detect(repo)
     if repo not in REPOS:
         raise ValueError(f"{repo} is not configured in {os.path.abspath(__file__)}")
     if not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0:
@@ -215,20 +252,27 @@ def handle(msg):
         raise ValueError(f"can't check out branch {branch!r}; PRs from forks aren't supported")
     root = os.path.expanduser(REPOS[repo])
     base_dir = worktree_dir(msg.get("worktreeDir"))
+    app = installed_ides().get(msg.get("ide")) if action == "open" else None
+    if action == "open" and not app:
+        raise ValueError(f"IDE {msg.get('ide')!r} is not installed; choose another in the extension's settings")
+    avd = msg.get("emulator") or ""
+    # The name goes to the emulator command as an argument.
+    if action == "emulator" and avd not in avds():
+        raise ValueError(f"emulator {avd!r} not found; choose another in the extension's settings")
 
     path = ensure_worktree(root, branch, base_dir)
     if action == "open":
-        run(*OPEN, path)  # returns at once, so Android Studio loads the project while the update runs
+        run("open", "-a", app, path)  # returns at once, so the IDE loads the project while the update runs
         update(path, branch)
     elif action == "claude":
         open_claude(path, f"{msg.get('title') or ''} (#{pr}): ")
     else:
         update(path, branch)
-        return {"ok": True, "path": path, "log": start_launch(action, path, branch)}
+        return {"ok": True, "path": path, "log": start_launch(action, path, branch, avd)}
     return {"ok": True, "path": path}
 
 
-# ---- background device run (--launch phone|emulator <worktree>) ----
+# ---- background device run (--launch phone|emulator <worktree> <avd>) ----
 
 def sdk_dir(path):
     with open(os.path.join(path, "local.properties")) as f:
@@ -248,12 +292,12 @@ def phone_serial(adb):
     raise RuntimeError("no phone connected; plug one in or pair it over Wi-Fi")
 
 
-def avd_serial(adb):
+def avd_serial(adb, avd):
     for line in run(adb, "devices").splitlines()[1:]:
         parts = line.split()
         if len(parts) > 1 and parts[0].startswith("emulator-") and parts[1] == "device":
             try:
-                if run(adb, "-s", parts[0], "emu", "avd", "name").splitlines()[0].strip() == AVD:
+                if run(adb, "-s", parts[0], "emu", "avd", "name").splitlines()[0].strip() == avd:
                     return parts[0]
             except (RuntimeError, IndexError):
                 continue
@@ -280,19 +324,19 @@ def wait_for(check, what):
         time.sleep(2)
 
 
-def emulator_serial(adb, sdk):
-    serial = avd_serial(adb)
+def emulator_serial(adb, sdk, avd):
+    serial = avd_serial(adb, avd)
     if not serial:
-        print(f"booting {AVD}", flush=True)
-        with open(os.path.join(LOG_DIR, f"{AVD}.log"), "w") as out:
-            proc = subprocess.Popen([os.path.join(sdk, "emulator", "emulator"), "-avd", AVD],
+        print(f"booting {avd}", flush=True)
+        with open(os.path.join(LOG_DIR, f"{avd}.log"), "w") as out:
+            proc = subprocess.Popen([os.path.join(sdk, "emulator", "emulator"), "-avd", avd],
                                     stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
 
         def booted():
             if proc.poll() is not None:
-                raise RuntimeError(f"{AVD} exited without booting (see {LOG_DIR}/{AVD}.log)")
-            return avd_serial(adb)
-        serial = wait_for(booted, f"{AVD} did not come up")
+                raise RuntimeError(f"{avd} exited without booting (see {LOG_DIR}/{avd}.log)")
+            return avd_serial(adb, avd)
+        serial = wait_for(booted, f"{avd} did not come up")
     wait_for(lambda: emulator_ready(adb, serial), f"{serial} did not finish booting")
     return serial
 
@@ -310,10 +354,10 @@ def gradle_install(path, serial):
     return p.returncode == 0, p.stdout
 
 
-def launch(target, path):
+def launch(target, path, avd):
     sdk = sdk_dir(path)
     adb = os.path.join(sdk, "platform-tools", "adb")
-    serial = phone_serial(adb) if target == "phone" else emulator_serial(adb, sdk)
+    serial = phone_serial(adb) if target == "phone" else emulator_serial(adb, sdk, avd)
     print(f"installing the debug build on {serial}", flush=True)
     ok, out = gradle_install(path, serial)
     if not ok:
@@ -341,11 +385,11 @@ def on_cancel(_signum, _frame):
     sys.exit(143)
 
 
-def launch_main(target, path):
+def launch_main(target, path, avd):
     title = f"{os.path.basename(path)} on {target}"
     signal.signal(signal.SIGTERM, on_cancel)
     try:
-        serial = launch(target, path)
+        serial = launch(target, path, avd)
         print(f"started on {serial}", flush=True)
         notify(f"Started on {serial}", title)
     except Exception as e:
@@ -369,7 +413,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "--launch" and sys.argv[2] in ("phone", "emulator"):
-        launch_main(sys.argv[2], sys.argv[3])
+    if len(sys.argv) == 5 and sys.argv[1] == "--launch" and sys.argv[2] in ("phone", "emulator"):
+        launch_main(*sys.argv[2:])
     else:
         main()
