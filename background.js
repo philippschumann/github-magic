@@ -1,5 +1,5 @@
 // Content scripts can't use native messaging, so they relay through here. The settings ride along with every request.
-const SETTINGS = ["worktreeDir", "ide", "emulator", "simulator"];
+const SETTINGS = ["worktreeDir", "ide", "iosIde", "emulator", "simulator"];
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   chrome.storage.local.get(SETTINGS, (stored) => {
     const request = { ...msg, ...Object.fromEntries(SETTINGS.map((key) => [key, stored?.[key] || ""])) };

@@ -3,7 +3,7 @@
 A Chrome and Firefox extension that adds two buttons to GitHub pull request pages. One checks the PR out locally and opens it in Android Studio, IntelliJ IDEA, VS Code or Xcode, or runs it on a device; the other opens a Claude session on it. macOS only.
 
 - **IDE ▾**: Open in your IDE, Run on phone, Run on emulator. The button shows your IDE's name once you've picked one. The run options only appear when adb is found, and Run on emulator only when you have an emulator.
-  - On iOS repos: Open in Xcode, Run on iPhone, Run on simulator. The run options only appear when Xcode is installed, and Run on simulator only when you have a simulator. A repo is an iOS repo when its main clone has an `.xcworkspace` or `.xcodeproj` at its root.
+  - On iOS repos: Open in Xcode or VS Code, Run on iPhone, Run on simulator. The run options only appear when Xcode is installed, and Run on simulator only when you have a simulator. A repo is an iOS repo when its main clone has an `.xcworkspace` or `.xcodeproj` at its root.
 - **Claude**: opens the Claude desktop session for the PR's worktree, or starts a new one
 
 Every action first checks the PR out as a git worktree named `<repo>-<branch>` inside the folder you choose. If the branch is already checked out somewhere (your main clone, another worktree), it uses that folder instead. The branch name comes from the PR page and is fetched from `origin`, so PRs from forks aren't supported.
@@ -40,11 +40,9 @@ Every action first checks the PR out as a git worktree named `<repo>-<branch>` i
 
 ## First use
 
-The first click on the IDE button asks which IDE to use; only installed ones are offered. It asks again if that IDE is uninstalled.
+The first click on the IDE button asks which IDE to use; only installed ones are offered. It asks again if that IDE is uninstalled. iOS repos have their own IDE setting: Xcode or VS Code.
 
 The first Run on emulator asks which emulator to use, from the ones in `~/.android/avd`. It asks again if that emulator is deleted. Run on simulator does the same with the iOS simulators Xcode has.
-
-iOS repos always open in Xcode, so they never ask for an IDE.
 
 The first time you use the buttons, they ask for the folder new worktrees go in (the IDE button shows only "Set up" until it's chosen).
 
@@ -52,7 +50,7 @@ You can change all of these later in the extension's settings (click the extensi
 
 ## What the actions do
 
-- **Open in your IDE:** `open -a <IDE app> <worktree>`. Opening the same PR again brings its window to the front. The IDE apps it looks for are in `IDES` at the top of the helper script. Xcode gets the worktree's workspace or project file instead of the folder.
+- **Open in your IDE:** `open -a <IDE app> <worktree>`. Opening the same PR again brings its window to the front. The IDE apps it looks for are in `IDES` and `IOS_IDES` at the top of the helper script. Xcode gets the worktree's workspace or project file instead of the folder.
 - **Bringing the worktree up to date:** the IDE button's actions fetch the PR's branch from `origin` and merge it with `--ff-only`. That only fast-forwards: local commits, or changes a pull would overwrite, stop it with an error.
   - Open in your IDE opens the window first and updates while it loads.
   - Run on phone / emulator / iPhone / simulator updates first, then builds.

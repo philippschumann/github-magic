@@ -3,11 +3,12 @@
 runs it on a device (Android phone or emulator, iPhone or iOS simulator), or opens a Claude desktop session there.
 
 Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|iphone|simulator|claude", "branch": ...,
-"title": ..., "ide": "<IDES key>", "emulator": "<AVD name>", "simulator": "<simulators() key>"} from the browser
+"title": ..., "ide": "<IDES key>", "iosIde": "<IOS_IDES key>", "emulator": "<AVD name>", "simulator": "<simulators() key>"} from the browser
 extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or
 {"ok": false, "error": ...}. Only repos listed in REPOS are accepted. A repo whose main clone has an Xcode project at
-its root is an iOS repo: it opens in Xcode and runs on an iPhone or simulator; any other repo is an Android repo.
-{"action": "detect"} lists the repo's platform, the installed IDEs, Xcode, the emulators and simulators, and whether
+its root is an iOS repo: it opens in "iosIde" and runs on an iPhone or simulator; any other repo is an Android repo
+and opens in "ide". {"action": "detect"} lists the repo's platform, the installed IDEs of both platforms, the
+emulators and simulators, and whether
 the repo's Android SDK has adb.
 Device runs take minutes: they continue in a background process (this script with --launch)
 that reports through a macOS notification and logs to LOG_DIR.
@@ -36,7 +37,11 @@ IDES = {
     "IntelliJ IDEA": ["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app", "IntelliJ IDEA CE.app"],
     "VS Code": ["Visual Studio Code.app"],
 }
-XCODE = ["Xcode.app", "Xcode-beta.app"]  # iOS repos always open in this one
+# The same for iOS repos. Xcode gets the project file; iPhone and simulator runs need it too.
+IOS_IDES = {
+    "Xcode": ["Xcode.app", "Xcode-beta.app"],
+    "VS Code": ["Visual Studio Code.app"],
+}
 APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]  # ~/Applications: JetBrains Toolbox installs
 RUN_TARGETS = ("phone", "emulator", "iphone", "simulator")
 ACTIONS = ("open", "claude", *RUN_TARGETS)
@@ -206,9 +211,9 @@ def find_app(apps):
     return next((p for p in (os.path.join(d, a) for a in apps for d in APP_DIRS) if os.path.isdir(p)), None)
 
 
-def installed_ides():
-    """Installed IDEs as name -> app bundle path."""
-    return {name: path for name, path in ((name, find_app(apps)) for name, apps in IDES.items()) if path}
+def installed_ides(ides=IDES):
+    """Installed IDEs (of IDES or IOS_IDES) as name -> app bundle path."""
+    return {name: path for name, path in ((name, find_app(apps)) for name, apps in ides.items()) if path}
 
 
 def xcode_project(path):
@@ -257,7 +262,7 @@ def detect(repo):
     except (TypeError, OSError, RuntimeError):
         adb = False
     return {"ok": True, "platform": "ios" if root and xcode_project(root) else "android", "ides": list(installed_ides()),
-            "xcode": bool(find_app(XCODE)), "avds": avds(), "simulators": list(simulators()), "adb": adb}
+            "iosIdes": list(installed_ides(IOS_IDES)), "avds": avds(), "simulators": list(simulators()), "adb": adb}
 
 
 def worktree_dir(value):
@@ -292,12 +297,10 @@ def handle(msg):
     root = os.path.expanduser(REPOS[repo])
     base_dir = worktree_dir(msg.get("worktreeDir"))
     project = xcode_project(root)
-    app = None
-    if action == "open":
-        app = find_app(XCODE) if project else installed_ides().get(msg.get("ide"))
-        if not app:
-            raise ValueError("Xcode is not installed" if project else
-                             f"IDE {msg.get('ide')!r} is not installed; choose another in the extension's settings")
+    ide = msg.get("iosIde" if project else "ide")
+    app = installed_ides(IOS_IDES if project else IDES).get(ide) if action == "open" else None
+    if action == "open" and not app:
+        raise ValueError(f"IDE {ide!r} is not installed; choose another in the extension's settings")
     device = ""
     # The emulator name goes to the emulator command as an argument; the simulator becomes a UDID from simctl.
     if action == "emulator":
@@ -312,7 +315,7 @@ def handle(msg):
     path = ensure_worktree(root, branch, base_dir)
     if action == "open":
         # Xcode gets the project file: a plain folder would open as a Swift package.
-        run("open", "-a", app, os.path.join(path, os.path.basename(project)) if project else path)
+        run("open", "-a", app, os.path.join(path, os.path.basename(project)) if project and ide == "Xcode" else path)
         update(path, branch)  # `open` returns at once, so the IDE loads the project while the update runs
     elif action == "claude":
         open_claude(path, f"{msg.get('title') or ''} (#{pr}): ")

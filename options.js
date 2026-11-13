@@ -1,7 +1,7 @@
 const input = document.getElementById("dir");
 const browse = document.getElementById("browse");
 // Setting (its <select> id) -> the list of choices the native host detects.
-const PICKS = { ide: "ides", emulator: "avds", simulator: "simulators" };
+const PICKS = { ide: "ides", iosIde: "iosIdes", emulator: "avds", simulator: "simulators" };
 const status = document.getElementById("status");
 
 function show(text, isError = false) {

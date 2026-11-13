@@ -110,23 +110,23 @@ class Update(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.orig = (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
-                     host.REPOS, host.find_app, host.simulators)
+                     host.REPOS, host.simulators)
         host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd))
         host.ensure_worktree = lambda *a: "/wt"
         host.update = lambda *a: self.calls.append("update")
         host.start_launch = lambda target, path, branch, avd: self.calls.append(f"launch {avd}".strip()) or "/log"
-        host.installed_ides = lambda: {"IntelliJ IDEA": "/Applications/IntelliJ IDEA CE.app"}
+        host.installed_ides = lambda ides=host.IDES: {"IntelliJ IDEA": "/Applications/IntelliJ IDEA CE.app"} if ides is host.IDES else {
+            "Xcode": "/Applications/Xcode.app", "VS Code": "/Applications/Visual Studio Code.app"}
         host.AVD_DIR = tempfile.mkdtemp()
         open(os.path.join(host.AVD_DIR, "Medium_Phone.ini"), "w").close()
         ios_clone = tempfile.mkdtemp()
         os.makedirs(os.path.join(ios_clone, "App.xcodeproj"))
         host.REPOS = dict(host.REPOS, **{"o/ios": ios_clone})
-        host.find_app = lambda apps: "/Applications/Xcode.app"
         host.simulators = lambda: {"iPhone 17 (iOS 26.3)": "SIM-UDID"}
 
     def tearDown(self):
         (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
-         host.REPOS, host.find_app, host.simulators) = self.orig
+         host.REPOS, host.simulators) = self.orig
 
     def act(self, action, **msg):
         host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a",
@@ -136,8 +136,14 @@ class Update(unittest.TestCase):
     def test_open_starts_the_chosen_ide_then_updates(self):
         self.assertEqual(self.act("open"), ["open -a /Applications/IntelliJ IDEA CE.app /wt", "update"])
 
-    def test_ios_repo_opens_its_project_in_xcode_whatever_ide_is_chosen(self):
-        self.assertEqual(self.act("open", repo="o/ios"), ["open -a /Applications/Xcode.app /wt/App.xcodeproj", "update"])
+    def test_ios_repo_opens_in_the_chosen_ios_ide_xcode_with_its_project(self):
+        self.assertEqual(self.act("open", repo="o/ios", iosIde="Xcode"), ["open -a /Applications/Xcode.app /wt/App.xcodeproj", "update"])
+        self.calls.clear()
+        self.assertEqual(self.act("open", repo="o/ios", iosIde="VS Code"), ["open -a /Applications/Visual Studio Code.app /wt", "update"])
+        # The Android IDE setting doesn't count for iOS repos.
+        for ide in ["IntelliJ IDEA", None]:
+            with self.assertRaisesRegex(ValueError, "not installed"):
+                self.act("open", repo="o/ios", iosIde=ide)
 
     def test_simulator_run_uses_the_chosen_simulators_udid(self):
         self.assertEqual(self.act("simulator", repo="o/ios", simulator="iPhone 17 (iOS 26.3)"), ["update", "launch SIM-UDID"])
@@ -181,6 +187,7 @@ class Detect(unittest.TestCase):
             "VS Code": os.path.join(self.tmp, "Applications/Visual Studio Code.app"),
         })
         self.assertEqual(host.handle({"action": "detect"})["ides"], ["IntelliJ IDEA", "VS Code"])
+        self.assertEqual(host.handle({"action": "detect"})["iosIdes"], ["Xcode", "VS Code"])
 
     def test_repo_with_an_xcode_project_at_its_root_is_ios(self):
         clone = os.path.join(self.tmp, "clone")

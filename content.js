@@ -53,6 +53,13 @@ function render() {
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const IDE_LABEL = "IDE"; // the dropdown's label until the IDE is known, then that IDE's name
+// Each platform has its own IDE setting, picked from the detected `list` like a run's `pick` below.
+const IDE_PICK = {
+  android: { key: "ide", list: "ides", title: "Choose your IDE", primary: "Use this IDE",
+    text: "Android PRs open in this IDE. You can change it later in the extension's settings." },
+  ios: { key: "iosIde", list: "iosIdes", title: "Choose your iOS IDE", primary: "Use this IDE",
+    text: "iOS PRs open in this IDE. You can change it later in the extension's settings." },
+};
 // Quiet: leaves the button as it is, so a running device install keeps showing "Installing…".
 const OPEN = { action: "open", quiet: true }; // labelled "Open in <IDE>"
 // Per platform of the repo, shown only when the native host finds adb (Android) or Xcode (iOS). Device runs continue
@@ -245,21 +252,18 @@ function renderPrMenu() {
     getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
       if (err) return alert(err);
       const ios = found.platform === "ios";
+      const pick = IDE_PICK[found.platform];
       const ide = ideFor(found, s);
       // First click, or the chosen IDE was uninstalled: ask which one to use, then open the menu.
-      if (!ide && !ios && found.ides.length) {
-        return choose("ide", found.ides, {
-          title: "Choose your IDE",
-          text: "PRs open in this IDE. You can change it later in the extension's settings.",
-          primary: "Use this IDE",
-        }, (chosen) => {
+      if (!ide && found[pick.list].length) {
+        return choose(pick.key, found[pick.list], pick, (chosen) => {
           studio.label.textContent = chosen;
           studio.click();
         });
       }
-      const runs = (ios ? found.xcode : found.adb) ? RUNS[found.platform].filter((a) => !a.pick || found[a.pick.list].length) : [];
+      const runs = (ios ? found.iosIdes.includes("Xcode") : found.adb) ? RUNS[found.platform].filter((a) => !a.pick || found[a.pick.list].length) : [];
       const actions = [...(ide ? [{ ...OPEN, label: `Open in ${ide}` }] : []), ...runs];
-      if (!actions.length) return alert(ios ? "Found no Xcode." : "Found no Android Studio, IntelliJ IDEA, VS Code or adb.");
+      if (!actions.length) return alert(ios ? "Found no Xcode or VS Code." : "Found no Android Studio, IntelliJ IDEA, VS Code or adb.");
       const run = (a) => runAction(m, a, studio, ide ?? IDE_LABEL);
       list.replaceChildren(...(s.worktreeDir
         ? actions.map((a) => menuItem(a.label, () => {
@@ -285,13 +289,13 @@ function renderPrMenu() {
 }
 
 function getSettings(cb) {
-  chrome.storage.local.get(["worktreeDir", "ide", "emulator", "simulator"], (stored) => cb(stored || {}));
+  chrome.storage.local.get(["worktreeDir", "ide", "iosIde", "emulator", "simulator"], (stored) => cb(stored || {}));
 }
 
-// iOS repos always open in Xcode; Android repos in the IDE chosen in the settings. Null until there is one.
+// The repo's platform's chosen IDE, if it is installed; null until one is chosen.
 function ideFor(found, s) {
-  if (found.platform === "ios") return found.xcode ? "Xcode" : null;
-  return found.ides.includes(s.ide) ? s.ide : null;
+  const { key, list } = IDE_PICK[found.platform];
+  return found[list].includes(s[key]) ? s[key] : null;
 }
 
 function menuItem(text, onClick) {
