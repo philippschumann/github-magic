@@ -1,4 +1,4 @@
-"""Self-check for the native host with stand-ins for adb, gradlew and the Claude app. Run:
+"""Self-check for the native host with stand-ins for adb, gradlew, xcrun, xcodebuild and the Claude app. Run:
     /usr/bin/python3 native-host/test_open_pr_in_studio.py
 """
 import importlib.util
@@ -39,6 +39,23 @@ FAKE_GRADLEW = """#!/bin/sh
 echo "gradlew $* serial=$ANDROID_SERIAL" >> calls.log
 if [ ! -f .ran ]; then touch .ran; echo 'INSTALL_FAILED_VERSION_DOWNGRADE'; exit 1; fi
 echo 'BUILD SUCCESSFUL'
+"""
+
+# Logs each call; lists devices from devices.json and answers -showBuildSettings like a scheme with an app extension.
+FAKE_XCRUN = """#!/bin/sh
+d="$(dirname "$0")"
+echo "xcrun $*" >> "$d/calls.log"
+[ "$1 $2 $3 $4" = "devicectl list devices --json-output" ] && cp "$d/devices.json" "$5"
+exit 0
+"""
+FAKE_XCODEBUILD = """#!/bin/sh
+echo "xcodebuild $*" >> "$(dirname "$0")/calls.log"
+case "$*" in *-showBuildSettings*) echo '[{"buildSettings": {"WRAPPER_EXTENSION": "appex"}}, {"buildSettings":
+  {"WRAPPER_EXTENSION": "app", "TARGET_BUILD_DIR": "/b", "WRAPPER_NAME": "MyApp.app", "PRODUCT_BUNDLE_IDENTIFIER": "co.x"}}]' ;;
+esac
+"""
+FAKE_OPEN = """#!/bin/sh
+echo "open $*" >> "$(dirname "$0")/calls.log"
 """
 
 
@@ -92,17 +109,24 @@ class Validation(unittest.TestCase):
 class Update(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.orig = host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR
-        host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd[:3]))
+        self.orig = (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
+                     host.REPOS, host.find_app, host.simulators)
+        host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd))
         host.ensure_worktree = lambda *a: "/wt"
         host.update = lambda *a: self.calls.append("update")
         host.start_launch = lambda target, path, branch, avd: self.calls.append(f"launch {avd}".strip()) or "/log"
         host.installed_ides = lambda: {"IntelliJ IDEA": "/Applications/IntelliJ IDEA CE.app"}
         host.AVD_DIR = tempfile.mkdtemp()
         open(os.path.join(host.AVD_DIR, "Medium_Phone.ini"), "w").close()
+        ios_clone = tempfile.mkdtemp()
+        os.makedirs(os.path.join(ios_clone, "App.xcodeproj"))
+        host.REPOS = dict(host.REPOS, **{"o/ios": ios_clone})
+        host.find_app = lambda apps: "/Applications/Xcode.app"
+        host.simulators = lambda: {"iPhone 17 (iOS 26.3)": "SIM-UDID"}
 
     def tearDown(self):
-        host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR = self.orig
+        (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
+         host.REPOS, host.find_app, host.simulators) = self.orig
 
     def act(self, action, **msg):
         host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a",
@@ -110,7 +134,19 @@ class Update(unittest.TestCase):
         return self.calls
 
     def test_open_starts_the_chosen_ide_then_updates(self):
-        self.assertEqual(self.act("open"), ["open -a /Applications/IntelliJ IDEA CE.app", "update"])
+        self.assertEqual(self.act("open"), ["open -a /Applications/IntelliJ IDEA CE.app /wt", "update"])
+
+    def test_ios_repo_opens_its_project_in_xcode_whatever_ide_is_chosen(self):
+        self.assertEqual(self.act("open", repo="o/ios"), ["open -a /Applications/Xcode.app /wt/App.xcodeproj", "update"])
+
+    def test_simulator_run_uses_the_chosen_simulators_udid(self):
+        self.assertEqual(self.act("simulator", repo="o/ios", simulator="iPhone 17 (iOS 26.3)"), ["update", "launch SIM-UDID"])
+
+    def test_unknown_or_missing_simulator_is_rejected_before_anything_runs(self):
+        for name in ["iPhone 1 (iOS 26.3)", "", None]:
+            with self.assertRaisesRegex(ValueError, "not found"):
+                self.act("simulator", repo="o/ios", simulator=name)
+        self.assertEqual(self.calls, [])
 
     def test_device_run_updates_before_installing(self):
         self.assertEqual(self.act("phone"), ["update", "launch"])
@@ -128,14 +164,14 @@ class Update(unittest.TestCase):
 class Detect(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.orig = host.APP_DIRS, host.REPOS, host.AVD_DIR
+        self.orig = host.APP_DIRS, host.REPOS, host.AVD_DIR, host.run
         host.AVD_DIR = os.path.join(self.tmp, "avd")
         host.APP_DIRS = [os.path.join(self.tmp, "Applications"), os.path.join(self.tmp, "home", "Applications")]
         host.REPOS = {"o/r": os.path.join(self.tmp, "clone")}
         os.makedirs(os.path.join(self.tmp, "clone"))
 
     def tearDown(self):
-        host.APP_DIRS, host.REPOS, host.AVD_DIR = self.orig
+        host.APP_DIRS, host.REPOS, host.AVD_DIR, host.run = self.orig
 
     def test_lists_installed_ides_in_order_with_their_app(self):
         for app in ["home/Applications/IntelliJ IDEA CE.app", "Applications/Visual Studio Code.app", "Applications/Xcode.app"]:
@@ -145,6 +181,29 @@ class Detect(unittest.TestCase):
             "VS Code": os.path.join(self.tmp, "Applications/Visual Studio Code.app"),
         })
         self.assertEqual(host.handle({"action": "detect"})["ides"], ["IntelliJ IDEA", "VS Code"])
+
+    def test_repo_with_an_xcode_project_at_its_root_is_ios(self):
+        clone = os.path.join(self.tmp, "clone")
+        self.assertEqual(host.detect("o/r")["platform"], "android")
+        os.makedirs(os.path.join(clone, "App.xcodeproj"))
+        self.assertEqual(host.detect("o/r")["platform"], "ios")
+        self.assertEqual(host.detect("evil/repo")["platform"], "android")
+        os.makedirs(os.path.join(clone, "App.xcworkspace"))
+        self.assertEqual(host.xcode_project(clone), os.path.join(clone, "App.xcworkspace"))
+
+    def test_simulators_newest_ios_first_without_other_platforms(self):
+        host.run = lambda *cmd, **kw: json.dumps({"devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-18-6": [{"name": "iPhone 16", "udid": "A"}],
+            "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [{"name": "Apple Watch", "udid": "W"}],
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-3": [{"name": "iPhone 17", "udid": "B"}, {"name": "iPad (A16)", "udid": "C"}],
+            "com.apple.CoreSimulator.SimRuntime.iOS-9-3": [{"name": "iPhone 6s", "udid": "D"}]}})
+        self.assertEqual(list(host.simulators().items()), [
+            ("iPhone 17 (iOS 26.3)", "B"), ("iPad (A16) (iOS 26.3)", "C"), ("iPhone 16 (iOS 18.6)", "A"), ("iPhone 6s (iOS 9.3)", "D")])
+
+        def no_xcode(*cmd, **kw):
+            raise RuntimeError("xcrun simctl list failed")
+        host.run = no_xcode
+        self.assertEqual(host.simulators(), {})
 
     def test_lists_emulators_by_their_ini_files(self):
         self.assertEqual(host.detect(None)["avds"], [])  # no AVD folder
@@ -222,6 +281,52 @@ class Launch(Fixture):
         with self.assertRaisesRegex(RuntimeError, "installDebug failed"):
             host.launch("phone", worktree, "")
         self.assertFalse(any("uninstall" in c for c in self.calls(self.tools)))
+
+
+class IosLaunch(unittest.TestCase):
+    def setUp(self):
+        self.bin = tempfile.mkdtemp()
+        for name, text in [("xcrun", FAKE_XCRUN), ("xcodebuild", FAKE_XCODEBUILD), ("open", FAKE_OPEN)]:
+            write_exe(os.path.join(self.bin, name), text)
+        self.addCleanup(os.environ.__setitem__, "PATH", os.environ["PATH"])
+        os.environ["PATH"] = self.bin + ":" + os.environ["PATH"]
+        self.addCleanup(setattr, host, "LOG_DIR", host.LOG_DIR)
+        host.LOG_DIR = self.bin
+        self.worktree = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.worktree, "App.xcodeproj"))
+        self.build = (f"xcodebuild -project {os.path.join(self.worktree, 'App.xcodeproj')} -scheme {host.IOS_SCHEME} "
+                      "-configuration Debug -destination id=")
+
+    def calls(self):
+        with open(os.path.join(self.bin, "calls.log")) as f:
+            return f.read().splitlines()
+
+    def devices(self, *devices):
+        with open(os.path.join(self.bin, "devices.json"), "w") as f:
+            json.dump({"result": {"devices": [
+                {"hardwareProperties": {"udid": udid, "deviceType": kind, "reality": "physical"},
+                 "connectionProperties": {"pairingState": "paired", "tunnelState": tunnel}} for udid, kind, tunnel in devices]}}, f)
+
+    def test_iphone_gets_a_signed_build_on_a_connected_iphone(self):
+        self.devices(("GONE", "iPhone", "unavailable"), ("IPAD", "iPad", "connected"), ("IDLE", "iPhone", "disconnected"),
+                     ("USB", "iPhone", "connected"))
+        self.assertEqual(host.ios_launch("iphone", self.worktree, ""), "USB")
+        self.assertEqual(self.calls()[1:], [
+            f"{self.build}USB -allowProvisioningUpdates build", f"{self.build}USB -showBuildSettings -json",
+            "xcrun devicectl device install app --device USB /b/MyApp.app",
+            "xcrun devicectl device process launch --terminate-existing --device USB co.x"])
+
+    def test_no_reachable_iphone(self):
+        self.devices(("GONE", "iPhone", "unavailable"), ("IPAD", "iPad", "connected"))
+        with self.assertRaisesRegex(RuntimeError, "no iPhone"):
+            host.ios_launch("iphone", self.worktree, "")
+
+    def test_simulator_is_booted_and_shown_then_gets_the_build(self):
+        self.assertEqual(host.ios_launch("simulator", self.worktree, "SIM"), "SIM")
+        self.assertEqual(self.calls(), [
+            "xcrun simctl bootstatus SIM -b", "open -a Simulator",
+            f"{self.build}SIM build", f"{self.build}SIM -showBuildSettings -json",
+            "xcrun simctl install SIM /b/MyApp.app", "xcrun simctl launch --terminate-running-process SIM co.x"])
 
 
 class Worktrees(unittest.TestCase):

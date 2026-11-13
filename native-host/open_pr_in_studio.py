@@ -1,12 +1,15 @@
 #!/usr/bin/python3
 """Native messaging host: checks out a GitHub PR in a sibling git worktree, then opens it in an IDE,
-runs it on a phone or emulator, or opens a Claude desktop session there.
+runs it on a device (Android phone or emulator, iPhone or iOS simulator), or opens a Claude desktop session there.
 
-Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|claude", "branch": ..., "title": ...,
-"ide": "<IDES key>", "emulator": "<AVD name>"} from the browser extension, which reads the PR's branch and title from
-the page. Replies {"ok": true, "path": ...} or {"ok": false, "error": ...}. Only repos listed in REPOS are accepted.
-{"action": "detect"} lists the installed IDEs, the emulators and whether the repo's Android SDK has adb.
-Phone and emulator runs take minutes: they continue in a background process (this script with --launch)
+Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|iphone|simulator|claude", "branch": ...,
+"title": ..., "ide": "<IDES key>", "emulator": "<AVD name>", "simulator": "<simulators() key>"} from the browser
+extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or
+{"ok": false, "error": ...}. Only repos listed in REPOS are accepted. A repo whose main clone has an Xcode project at
+its root is an iOS repo: it opens in Xcode and runs on an iPhone or simulator; any other repo is an Android repo.
+{"action": "detect"} lists the repo's platform, the installed IDEs, Xcode, the emulators and simulators, and whether
+the repo's Android SDK has adb.
+Device runs take minutes: they continue in a background process (this script with --launch)
 that reports through a macOS notification and logs to LOG_DIR.
 """
 import json
@@ -23,6 +26,7 @@ from urllib.parse import quote
 # GitHub repo -> local main clone. Worktrees are created next to it as <clone>-<branch>.
 REPOS = {
     "example/MyAndroidApp": "~/code/MyAndroidApp",
+    "example/MyiOSApp": "~/code/MyiOSApp",
 }
 # gitignored files a fresh worktree needs to build.
 COPY_FILES = ["local.properties"]
@@ -32,10 +36,13 @@ IDES = {
     "IntelliJ IDEA": ["IntelliJ IDEA.app", "IntelliJ IDEA Ultimate.app", "IntelliJ IDEA CE.app"],
     "VS Code": ["Visual Studio Code.app"],
 }
+XCODE = ["Xcode.app", "Xcode-beta.app"]  # iOS repos always open in this one
 APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]  # ~/Applications: JetBrains Toolbox installs
-ACTIONS = ("open", "phone", "emulator", "claude")
+RUN_TARGETS = ("phone", "emulator", "iphone", "simulator")
+ACTIONS = ("open", "claude", *RUN_TARGETS)
 
-# Device runs.
+# Device runs. iOS: the scheme's Debug build; its app and bundle id come from the build settings.
+IOS_SCHEME = "MyApp"
 APP_ID = "com.example.myapp"
 START_ACTIVITY = APP_ID + "/com.example.myapp.MainActivity"
 PHONE_MODELS = ["model:Pixel_10", "model:Pixel_6"]  # preferred in this order, else any other phone
@@ -143,13 +150,13 @@ def cancel_previous(target):
             pass
 
 
-def start_launch(target, path, branch, avd):
+def start_launch(target, path, branch, device):
     os.makedirs(LOG_DIR, exist_ok=True)
     cancel_previous(target)
     log = os.path.join(LOG_DIR, f"{branch.replace('/', '-')}-{target}.log")
     with open(log, "w") as out:
         # New session: the browser may kill the host's process group once it has replied.
-        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path, avd],
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--launch", target, path, device],
                                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     with open(os.path.join(LOG_DIR, f"{target}.pid"), "w") as f:
         json.dump({"pid": proc.pid, "log": log}, f)
@@ -157,9 +164,9 @@ def start_launch(target, path, branch, avd):
 
 
 def run_status(log):
-    """State of a phone/emulator run, read from the last line its background process wrote."""
+    """State of a device run, read from the last line its background process wrote."""
     log = os.path.realpath(log) if isinstance(log, str) else ""
-    m = re.search(r"-(phone|emulator)\.log$", log)
+    m = re.search(rf"-({'|'.join(RUN_TARGETS)})\.log$", log)
     if os.path.dirname(log) != os.path.realpath(LOG_DIR) or not m or not os.path.isfile(log):
         raise ValueError("unknown run")
     with open(log, errors="replace") as f:
@@ -194,14 +201,23 @@ def choose_folder(current):
     return {"ok": True, "path": p.stdout.strip().rstrip("/") or "/"}
 
 
+def find_app(apps):
+    """Path of the first of these app bundles found in APP_DIRS, else None."""
+    return next((p for p in (os.path.join(d, a) for a in apps for d in APP_DIRS) if os.path.isdir(p)), None)
+
+
 def installed_ides():
     """Installed IDEs as name -> app bundle path."""
-    found = {}
-    for name, apps in IDES.items():
-        path = next((p for p in (os.path.join(d, a) for a in apps for d in APP_DIRS) if os.path.isdir(p)), None)
-        if path:
-            found[name] = path
-    return found
+    return {name: path for name, path in ((name, find_app(apps)) for name, apps in IDES.items()) if path}
+
+
+def xcode_project(path):
+    """The Xcode workspace or project at the folder's root (a workspace wins: it includes the project), else None."""
+    try:
+        names = sorted(os.listdir(path), key=lambda n: not n.endswith(".xcworkspace"))
+    except OSError:
+        return None
+    return next((os.path.join(path, n) for n in names if n.endswith((".xcworkspace", ".xcodeproj"))), None)
 
 
 def avds():
@@ -212,13 +228,36 @@ def avds():
         return []
 
 
-def detect(repo):
-    """Installed IDEs, emulators, and whether adb is in the repo's Android SDK (sdk.dir), which phone/emulator runs use."""
+def simulators():
+    """Available iOS simulators as "iPhone 17 Pro (iOS 26.3)" -> UDID, newest iOS first."""
     try:
-        adb = os.access(os.path.join(sdk_dir(os.path.expanduser(REPOS[repo])), "platform-tools", "adb"), os.X_OK)
-    except (KeyError, TypeError, OSError, RuntimeError):
+        runtimes = json.loads(run("xcrun", "simctl", "list", "devices", "available", "-j"))["devices"]
+    except (RuntimeError, ValueError, KeyError, TypeError):
+        return {}  # no Xcode
+    found = {}
+    # Runtime ids end in e.g. "iOS-26-3"; watchOS, tvOS and visionOS runtimes are skipped.
+    versions = {r: re.search(r"\.iOS-([\d-]+)$", r) for r in runtimes}
+    for r in sorted((r for r in runtimes if versions[r]),
+                    key=lambda r: [int(n) for n in versions[r].group(1).split("-")], reverse=True):
+        for sim in runtimes[r]:
+            # shortcut: two simulators with the same name and iOS share a label; the first one is used.
+            found.setdefault(f"{sim['name']} (iOS {versions[r].group(1).replace('-', '.')})", sim["udid"])
+    return found
+
+
+def detect(repo):
+    """The repo's platform, installed IDEs and Xcode, emulators and simulators, and whether adb is in the repo's
+    Android SDK (sdk.dir), which phone/emulator runs use."""
+    try:
+        root = os.path.expanduser(REPOS[repo])
+    except (KeyError, TypeError):
+        root = None
+    try:
+        adb = os.access(os.path.join(sdk_dir(root), "platform-tools", "adb"), os.X_OK)
+    except (TypeError, OSError, RuntimeError):
         adb = False
-    return {"ok": True, "ides": list(installed_ides()), "avds": avds(), "adb": adb}
+    return {"ok": True, "platform": "ios" if root and xcode_project(root) else "android", "ides": list(installed_ides()),
+            "xcode": bool(find_app(XCODE)), "avds": avds(), "simulators": list(simulators()), "adb": adb}
 
 
 def worktree_dir(value):
@@ -252,27 +291,38 @@ def handle(msg):
         raise ValueError(f"can't check out branch {branch!r}; PRs from forks aren't supported")
     root = os.path.expanduser(REPOS[repo])
     base_dir = worktree_dir(msg.get("worktreeDir"))
-    app = installed_ides().get(msg.get("ide")) if action == "open" else None
-    if action == "open" and not app:
-        raise ValueError(f"IDE {msg.get('ide')!r} is not installed; choose another in the extension's settings")
-    avd = msg.get("emulator") or ""
-    # The name goes to the emulator command as an argument.
-    if action == "emulator" and avd not in avds():
-        raise ValueError(f"emulator {avd!r} not found; choose another in the extension's settings")
+    project = xcode_project(root)
+    app = None
+    if action == "open":
+        app = find_app(XCODE) if project else installed_ides().get(msg.get("ide"))
+        if not app:
+            raise ValueError("Xcode is not installed" if project else
+                             f"IDE {msg.get('ide')!r} is not installed; choose another in the extension's settings")
+    device = ""
+    # The emulator name goes to the emulator command as an argument; the simulator becomes a UDID from simctl.
+    if action == "emulator":
+        device = msg.get("emulator") or ""
+        if device not in avds():
+            raise ValueError(f"emulator {device!r} not found; choose another in the extension's settings")
+    if action == "simulator":
+        device = simulators().get(msg.get("simulator"))
+        if not device:
+            raise ValueError(f"simulator {msg.get('simulator')!r} not found; choose another in the extension's settings")
 
     path = ensure_worktree(root, branch, base_dir)
     if action == "open":
-        run("open", "-a", app, path)  # returns at once, so the IDE loads the project while the update runs
-        update(path, branch)
+        # Xcode gets the project file: a plain folder would open as a Swift package.
+        run("open", "-a", app, os.path.join(path, os.path.basename(project)) if project else path)
+        update(path, branch)  # `open` returns at once, so the IDE loads the project while the update runs
     elif action == "claude":
         open_claude(path, f"{msg.get('title') or ''} (#{pr}): ")
     else:
         update(path, branch)
-        return {"ok": True, "path": path, "log": start_launch(action, path, branch, avd)}
+        return {"ok": True, "path": path, "log": start_launch(action, path, branch, device)}
     return {"ok": True, "path": path}
 
 
-# ---- background device run (--launch phone|emulator <worktree> <avd>) ----
+# ---- background device run (--launch <RUN_TARGETS item> <worktree> <AVD name or simulator UDID>) ----
 
 def sdk_dir(path):
     with open(os.path.join(path, "local.properties")) as f:
@@ -354,7 +404,58 @@ def gradle_install(path, serial):
     return p.returncode == 0, p.stdout
 
 
+def iphone_udid():
+    """The first paired iPhone that isn't out of reach, connected ones first."""
+    out = os.path.join(LOG_DIR, "devices.json")  # devicectl writes its JSON only to a file
+    run("xcrun", "devicectl", "list", "devices", "--json-output", out)
+    with open(out) as f:
+        devices = json.load(f)["result"]["devices"]
+    phones = [d for d in devices if d["hardwareProperties"].get("deviceType") == "iPhone"
+              and d["hardwareProperties"].get("reality") == "physical"
+              and d["connectionProperties"].get("pairingState") == "paired"
+              and d["connectionProperties"].get("tunnelState") != "unavailable"]
+    if not phones:
+        raise RuntimeError("no iPhone connected; plug one in, unlock it and trust this Mac")
+    phones.sort(key=lambda d: d["connectionProperties"].get("tunnelState") != "connected")
+    return phones[0]["hardwareProperties"]["udid"]
+
+
+def ios_launch(target, path, udid):
+    """Build the scheme for the iPhone or the simulator with this UDID, install it there and start it."""
+    if target == "simulator":
+        print(f"booting simulator {udid}", flush=True)
+        run("xcrun", "simctl", "bootstatus", udid, "-b")  # boots it if needed and waits until it has
+        run("open", "-a", "Simulator")
+    else:
+        udid = iphone_udid()
+    project = xcode_project(path)
+    xcodebuild = ["xcodebuild", "-workspace" if project.endswith(".xcworkspace") else "-project", project,
+                  "-scheme", IOS_SCHEME, "-configuration", "Debug", "-destination", f"id={udid}"]
+    print(f"building {IOS_SCHEME} for {udid}", flush=True)
+    # The iPhone needs a signed build: automatic signing may have to register it and fetch a profile.
+    signing = ["-allowProvisioningUpdates"] if target == "iphone" else []
+    p = subprocess.run([*xcodebuild, *signing, "build"], cwd=path, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(p.stdout, flush=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"xcodebuild failed for {udid}")
+    settings = next(t["buildSettings"] for t in json.loads(run(*xcodebuild, "-showBuildSettings", "-json", cwd=path))
+                    if t["buildSettings"].get("WRAPPER_EXTENSION") == "app")
+    app = os.path.join(settings["TARGET_BUILD_DIR"], settings["WRAPPER_NAME"])
+    bundle_id = settings["PRODUCT_BUNDLE_IDENTIFIER"]
+    print(f"installing {app} on {udid}", flush=True)
+    if target == "simulator":
+        run("xcrun", "simctl", "install", udid, app)
+        run("xcrun", "simctl", "launch", "--terminate-running-process", udid, bundle_id)
+    else:
+        run("xcrun", "devicectl", "device", "install", "app", "--device", udid, app)
+        run("xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", udid, bundle_id)
+    return udid
+
+
 def launch(target, path, avd):
+    if target in ("iphone", "simulator"):
+        return ios_launch(target, path, avd)
     sdk = sdk_dir(path)
     adb = os.path.join(sdk, "platform-tools", "adb")
     serial = phone_serial(adb) if target == "phone" else emulator_serial(adb, sdk, avd)
@@ -413,7 +514,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 5 and sys.argv[1] == "--launch" and sys.argv[2] in ("phone", "emulator"):
+    if len(sys.argv) == 5 and sys.argv[1] == "--launch" and sys.argv[2] in RUN_TARGETS:
         launch_main(*sys.argv[2:])
     else:
         main()

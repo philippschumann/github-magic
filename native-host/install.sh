@@ -15,7 +15,7 @@ write() { # dir, allowed-key, allowed-value
   cat > "$1/$NAME.json" <<EOF
 {
   "name": "$NAME",
-  "description": "Open GitHub PRs in Android Studio",
+  "description": "Open GitHub PRs in an IDE or on a device",
   "path": "$HOST",
   "type": "stdio",
   "$2": ["$3"]

@@ -26,11 +26,15 @@
 
   <label for="ide">IDE</label>
   <select id="ide"><option value="">Not chosen</option></select>
-  <p class="hint">"Open in" uses this IDE. Only installed IDEs are listed. Until one is chosen, the IDE button asks.</p>
+  <p class="hint">"Open in" uses this IDE for Android repos; iOS repos always open in Xcode. Only installed IDEs are listed. Until one is chosen, the IDE button asks.</p>
 
   <label for="emulator">Emulator</label>
   <select id="emulator"><option value="">Not chosen</option></select>
   <p class="hint">"Run on emulator" uses this emulator and boots it if it isn't running. Until one is chosen, it asks.</p>
+
+  <label for="simulator">Simulator</label>
+  <select id="simulator"><option value="">Not chosen</option></select>
+  <p class="hint">"Run on simulator" uses this iOS simulator and boots it if it isn't running. Until one is chosen, it asks.</p>
 
   <p id="status" role="status"></p>
   <script src="options.js"></script>

@@ -52,15 +52,29 @@ function render() {
 // worktree and acts on it.
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
-const IDE_LABEL = "IDE"; // the dropdown's label until an IDE is chosen, then that IDE's name
-// Quiet: leaves the button as it is, so a running phone/emulator install keeps showing "Installing…".
+const IDE_LABEL = "IDE"; // the dropdown's label until the IDE is known, then that IDE's name
+// Quiet: leaves the button as it is, so a running device install keeps showing "Installing…".
 const OPEN = { action: "open", quiet: true }; // labelled "Open in <IDE>"
-// Shown only when the native host finds adb; "Run on emulator" also needs an emulator.
-const RUNS = [
-  // Phone/emulator runs continue in the background; the button polls until the app is installed and started.
-  { action: "phone", label: "Run on phone", busy: "Installing…", done: "Installed", poll: true },
-  { action: "emulator", label: "Run on emulator", busy: "Installing…", done: "Installed", poll: true },
-];
+// Per platform of the repo, shown only when the native host finds adb (Android) or Xcode (iOS). Device runs continue
+// in the background; the button polls until the app is installed and started. A run with `pick` needs one of the
+// detected `list` (emulators, simulators): the first run asks which, and it is saved as the `key` setting.
+const RUN = { busy: "Installing…", done: "Installed", poll: true };
+const RUNS = {
+  android: [
+    { ...RUN, action: "phone", label: "Run on phone" },
+    { ...RUN, action: "emulator", label: "Run on emulator", pick: {
+      key: "emulator", list: "avds", title: "Choose an emulator", primary: "Use this emulator",
+      text: "Run on emulator installs the PR on this emulator. You can change it later in the extension's settings.",
+    } },
+  ],
+  ios: [
+    { ...RUN, action: "iphone", label: "Run on iPhone" },
+    { ...RUN, action: "simulator", label: "Run on simulator", pick: {
+      key: "simulator", list: "simulators", title: "Choose a simulator", primary: "Use this simulator",
+      text: "Run on simulator installs the PR on this simulator. You can change it later in the extension's settings.",
+    } },
+  ],
+};
 const CLAUDE_LABEL = "Claude";
 const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened" };
 const POLL_MS = 3000;
@@ -218,7 +232,9 @@ function renderPrMenu() {
   const studio = makeButton(IDE_LABEL, true);
   studio.setAttribute("aria-haspopup", "menu");
   studio.setAttribute("aria-expanded", "false");
-  getSettings((s) => { if (s.ide) studio.label.textContent = s.ide; });
+  getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
+    if (!err && studio.label.textContent === IDE_LABEL) studio.label.textContent = ideFor(found, s) ?? IDE_LABEL;
+  }));
   const list = document.createElement("div");
   list.setAttribute("role", "menu");
   list.setAttribute("aria-label", IDE_LABEL);
@@ -228,9 +244,10 @@ function renderPrMenu() {
     if (!list.hidden) return setMenuOpen(false);
     getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
       if (err) return alert(err);
-      const ide = found.ides.includes(s.ide) ? s.ide : null;
+      const ios = found.platform === "ios";
+      const ide = ideFor(found, s);
       // First click, or the chosen IDE was uninstalled: ask which one to use, then open the menu.
-      if (!ide && found.ides.length) {
+      if (!ide && !ios && found.ides.length) {
         return choose("ide", found.ides, {
           title: "Choose your IDE",
           text: "PRs open in this IDE. You can change it later in the extension's settings.",
@@ -240,19 +257,15 @@ function renderPrMenu() {
           studio.click();
         });
       }
-      const runs = found.adb ? RUNS.filter((a) => a.action !== "emulator" || found.avds.length) : [];
+      const runs = (ios ? found.xcode : found.adb) ? RUNS[found.platform].filter((a) => !a.pick || found[a.pick.list].length) : [];
       const actions = [...(ide ? [{ ...OPEN, label: `Open in ${ide}` }] : []), ...runs];
-      if (!actions.length) return alert("Found no Android Studio, IntelliJ IDEA, VS Code or adb.");
+      if (!actions.length) return alert(ios ? "Found no Xcode." : "Found no Android Studio, IntelliJ IDEA, VS Code or adb.");
       const run = (a) => runAction(m, a, studio, ide ?? IDE_LABEL);
       list.replaceChildren(...(s.worktreeDir
         ? actions.map((a) => menuItem(a.label, () => {
-          // First run on an emulator, or the chosen one was deleted: ask which one to use, then run.
-          if (a.action !== "emulator" || found.avds.includes(s.emulator)) return run(a);
-          choose("emulator", found.avds, {
-            title: "Choose an emulator",
-            text: "Run on emulator installs the PR on this emulator. You can change it later in the extension's settings.",
-            primary: "Use this emulator",
-          }, () => run(a));
+          // First run on an emulator or simulator, or the chosen one was deleted: ask which one to use, then run.
+          if (!a.pick || found[a.pick.list].includes(s[a.pick.key])) return run(a);
+          choose(a.pick.key, found[a.pick.list], a.pick, () => run(a));
         }))
         : [menuItem("Set up", () => openSetup(() => studio.click()))]));
       setMenuOpen(true);
@@ -272,7 +285,13 @@ function renderPrMenu() {
 }
 
 function getSettings(cb) {
-  chrome.storage.local.get(["worktreeDir", "ide", "emulator"], (stored) => cb(stored || {}));
+  chrome.storage.local.get(["worktreeDir", "ide", "emulator", "simulator"], (stored) => cb(stored || {}));
+}
+
+// iOS repos always open in Xcode; Android repos in the IDE chosen in the settings. Null until there is one.
+function ideFor(found, s) {
+  if (found.platform === "ios") return found.xcode ? "Xcode" : null;
+  return found.ides.includes(s.ide) ? s.ide : null;
 }
 
 function menuItem(text, onClick) {
@@ -339,7 +358,7 @@ function openSetup(onDone) {
   });
 }
 
-// First-run dialog: pick one of `options` (installed IDEs, emulators) and save it as the `key` setting.
+// First-run dialog: pick one of `options` (installed IDEs, emulators, simulators) and save it as the `key` setting.
 function choose(key, options, { title, text, primary }, onDone) {
   const choices = document.createElement("fieldset");
   choices.setAttribute("aria-label", title);
