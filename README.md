@@ -54,6 +54,7 @@ You can change all of these later in the extension's settings (click the extensi
 - **Bringing the worktree up to date:** the IDE button's actions fetch the PR's branch from `origin` and merge it with `--ff-only`. That only fast-forwards: local commits, or changes a pull would overwrite, stop it with an error.
   - Open in your IDE opens the window first and updates while it loads.
   - Run on phone / emulator / iPhone / simulator updates first, then builds.
+  - If the branch is gone from `origin` (usually deleted after the PR was merged), they stop with a "Branch not found" dialog before opening or building anything. If `origin` can't be reached, they go ahead as usual.
 - **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phone order is Pixel 10, then Pixel 6, then any other phone. The emulator is the one you chose, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
   - A new run cancels the one still going on that device, whatever PR it was for.
   - If the device refuses the build as a downgrade or because of a different signing key, the app is uninstalled and installed again, which wipes its data.

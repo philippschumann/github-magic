@@ -110,7 +110,10 @@ class Update(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.orig = (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
-                     host.REPOS, host.simulators)
+                     host.REPOS, host.simulators, host.branch_deleted, host.open_claude)
+        self.deleted = False
+        host.branch_deleted = lambda root, branch: self.deleted
+        host.open_claude = lambda path, prompt: self.calls.append("claude")
         host.run = lambda *cmd, **kw: self.calls.append(" ".join(cmd))
         host.ensure_worktree = lambda *a: "/wt"
         host.update = lambda *a: self.calls.append("update")
@@ -126,11 +129,11 @@ class Update(unittest.TestCase):
 
     def tearDown(self):
         (host.run, host.ensure_worktree, host.update, host.start_launch, host.installed_ides, host.AVD_DIR,
-         host.REPOS, host.simulators) = self.orig
+         host.REPOS, host.simulators, host.branch_deleted, host.open_claude) = self.orig
 
     def act(self, action, **msg):
-        host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a",
-                     "ide": "IntelliJ IDEA", **msg})
+        self.reply = host.handle({"repo": "example/MyAndroidApp", "pr": 1, "action": action, "branch": "feat/a",
+                                  "ide": "IntelliJ IDEA", **msg})
         return self.calls
 
     def test_open_starts_the_chosen_ide_then_updates(self):
@@ -165,6 +168,16 @@ class Update(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not found"):
                 self.act("emulator", emulator=name)
         self.assertEqual(self.calls, [])
+
+    def test_deleted_branch_stops_ide_actions_before_anything_runs_but_not_claude(self):
+        self.deleted = True
+        for action, msg in [("open", {}), ("phone", {}), ("emulator", {"emulator": "Medium_Phone"}),
+                            ("open", {"repo": "o/ios", "iosIde": "Xcode"})]:
+            self.assertEqual(self.act(action, **msg), [])
+            self.assertEqual(self.reply["title"], "Branch not found")
+            self.assertIn("feat/a no longer exists on GitHub", self.reply["error"])
+            self.assertFalse(self.reply["ok"])
+        self.assertEqual(self.act("claude"), ["claude"])
 
 
 class Detect(unittest.TestCase):
@@ -393,6 +406,19 @@ class Worktrees(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "git -C"):
             host.update(path, "feat/a")
         self.assertEqual(git("-C", path, "rev-parse", "HEAD"), local)  # the local commit is kept
+
+    def test_branch_deleted_only_when_origin_says_so(self):
+        tmp = tempfile.mkdtemp()
+        origin, root = os.path.join(tmp, "origin.git"), os.path.join(tmp, "App")
+        for cmd in (["git", "init", "-q", "--bare", "-b", "main", origin], ["git", "clone", "-q", origin, root],
+                    ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+                    ["git", "-C", root, "push", "-q", "origin", "HEAD:feat/a"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        self.assertFalse(host.branch_deleted(root, "feat/a"))
+        self.assertTrue(host.branch_deleted(root, "feat/gone"))
+        self.assertTrue(host.branch_deleted(root, "a"))  # no suffix match on feat/a
+        subprocess.run(["git", "-C", root, "remote", "set-url", "origin", os.path.join(tmp, "unreachable.git")], check=True)
+        self.assertFalse(host.branch_deleted(root, "feat/gone"))  # offline: carry on as before
 
 
 class Cancel(unittest.TestCase):

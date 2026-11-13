@@ -5,9 +5,9 @@ runs it on a device (Android phone or emulator, iPhone or iOS simulator), or ope
 Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|iphone|simulator|claude", "branch": ...,
 "title": ..., "ide": "<IDES key>", "iosIde": "<IOS_IDES key>", "emulator": "<AVD name>", "simulator": "<simulators() key>"} from the browser
 extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or
-{"ok": false, "error": ...}. Only repos listed in REPOS are accepted. A repo whose main clone has an Xcode project at
-its root is an iOS repo: it opens in "iosIde" and runs on an iPhone or simulator; any other repo is an Android repo
-and opens in "ide". {"action": "detect"} lists the repo's platform, the installed IDEs of both platforms, the
+{"ok": false, "error": ...}, plus a "title" for errors the extension shows in a dialog (the PR's branch is gone).
+Only repos listed in REPOS are accepted. A repo whose main clone has an Xcode project at its root is an iOS repo:
+it opens in "iosIde" and runs on an iPhone or simulator; any other repo is an Android repo and opens in "ide". {"action": "detect"} lists the repo's platform, the installed IDEs of both platforms, the
 emulators and simulators, and whether
 the repo's Android SDK has adb.
 Device runs take minutes: they continue in a background process (this script with --launch)
@@ -98,6 +98,12 @@ def ensure_worktree(root, branch, base_dir):
             shutil.copy2(src, dst)
     # Android Studio and the Claude app match folders by resolved path; same path = same window/session.
     return os.path.realpath(path)
+
+
+def branch_deleted(root, branch):
+    """True only when origin answers that it has no such branch; an unreachable origin doesn't count."""
+    return subprocess.run(["git", "-C", root, "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
+                          capture_output=True, stdin=subprocess.DEVNULL).returncode == 2
 
 
 def update(path, branch):
@@ -312,6 +318,11 @@ def handle(msg):
         if not device:
             raise ValueError(f"simulator {msg.get('simulator')!r} not found; choose another in the extension's settings")
 
+    # Checked before anything opens: an existing worktree would open, then fail to update. The Claude button skips
+    # it, so a merged PR's session can still be reopened.
+    if action != "claude" and branch_deleted(root, branch):
+        return {"ok": False, "title": "Branch not found", "error": f"The branch {branch} no longer exists on GitHub. "
+                "It was probably deleted after the PR was merged or closed."}
     path = ensure_worktree(root, branch, base_dir)
     if action == "open":
         # Xcode gets the project file: a plain folder would open as a Swift package.

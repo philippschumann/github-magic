@@ -190,17 +190,19 @@ function runAction(m, a, btn, idle) {
     branch: [...branches].at(-1)?.textContent ?? "",
     title: document.querySelector('[data-component="PageHeader"] h1 .markdown-title')?.textContent ?? "",
   };
-  if (a.quiet) return send(msg, (_res, err) => err && alert(`${a.label} failed:\n${err}`));
+  // Errors the native host gives a title (the PR's branch is gone) get a dialog; any other an alert.
+  const report = (err, title) => (title ? openDialog({ title, text: err, primary: "OK" }) : alert(`${a.label} failed:\n${err}`));
+  if (a.quiet) return send(msg, (res, err) => err && report(err, res?.title));
   const token = (btn.run = {});
   const show = (text, title = "") => {
     if (btn.run !== token) return;
     btn.label.textContent = text;
     btn.title = title;
   };
-  const fail = (err) => {
+  const fail = (err, title) => {
     if (btn.run !== token) return;
     show(idle, err);
-    alert(`${a.label} failed:\n${err}`);
+    report(err, title);
   };
   const finish = (title) => {
     show(a.done, title);
@@ -208,7 +210,7 @@ function runAction(m, a, btn, idle) {
   };
   show(a.busy);
   send(msg, (res, err) => {
-    if (err) return fail(err);
+    if (err) return fail(err, res?.title);
     if (!a.poll) return finish(res.path);
     const poll = () => send({ action: "status", log: res.log }, (st, err2) => {
       if (btn.run !== token) return;
@@ -311,7 +313,8 @@ function menuItem(text, onClick) {
 }
 
 // A GitHub-style modal: title, text, optional `content` element, Cancel and one primary button.
-// `onPrimary(close, showError)` does the work and calls close() when it is done.
+// `onPrimary(close, showError)` does the work and calls close() when it is done. Without it the dialog only informs:
+// no Cancel, and the primary button closes it.
 function openDialog({ title, text, content, primary, onPrimary }) {
   document.getElementById(`${MENU_ID}-dialog`)?.remove();
   const dialog = document.createElement("dialog");
@@ -329,6 +332,7 @@ function openDialog({ title, text, content, primary, onPrimary }) {
   const ok = makeButton(primary, false, "primary");
   cancel.addEventListener("click", () => dialog.close());
   ok.addEventListener("click", () => {
+    if (!onPrimary) return dialog.close();
     ok.disabled = true;
     error.textContent = "";
     onPrimary(() => dialog.close(), (err) => {
@@ -336,7 +340,7 @@ function openDialog({ title, text, content, primary, onPrimary }) {
       error.textContent = err;
     });
   });
-  footer.append(cancel, ok);
+  footer.append(...(onPrimary ? [cancel] : []), ok);
   dialog.append(...[heading, body, content, error, footer].filter(Boolean));
   dialog.addEventListener("click", (e) => e.target === dialog && dialog.close()); // backdrop click
   dialog.addEventListener("close", () => dialog.remove());
