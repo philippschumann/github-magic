@@ -95,7 +95,7 @@ A library crate with no Tauri dependency, so `cargo test` covers it without a UI
 
 Changes from the script:
 
-- **Launcher activity:** `START_ACTIVITY` goes away. After installing, the run asks the device for it with `adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER <appId>` (the last line is the component), then runs `am start -W -n <component>`.
+- **Launcher activity:** `START_ACTIVITY` goes away. After installing, the run asks the device for the app's launcher activities with `adb shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER <appId>` and starts the first one that isn't LeakCanary's with `am start -W -n <component>`. `resolve-activity` doesn't work here: a debug build with LeakCanary has two launcher activities, and the device then answers with its chooser.
 - **Settings for each repo:** `APP_ID` and `IOS_SCHEME` are no longer global, they're stored per repo.
 - **Lock per repo:** two clicks on PRs of the same repo now run in one process. A lock per main clone serializes the git steps (`worktree add`, `fetch`, `switch`, `merge`), so they don't collide on git's lock files.
 - **Injectable paths:** paths (app dirs, AVD dir, Claude sessions dir, log dir) come from a `Paths` value instead of module globals, so tests point them at temp dirs.
@@ -106,7 +106,7 @@ It replaces the `--launch` background process, the `.pid` files and the `ps` che
 
 - **One slot per target** (`phone`, `emulator`, `iphone`, `simulator`). A slot holds either the running run or the last finished one: repo, PR, branch, start time, log path, and the state `running`, `started`, `failed` or `cancelled` with a message.
 - **Starting:** a new run on a target cancels the one still going there, whatever PR it was for, as today.
-- **Execution:** a run is a tokio task. Each command it starts (`gradlew`, `xcodebuild`, …) leads its own process group. Cancelling sends `SIGTERM` to the current group, which also stops the Gradle client so its daemon cancels the build, then marks the run `cancelled`. The emulator is started detached in its own session, so it outlives the run and the app.
+- **Execution:** a run is a thread. Each command it starts (`gradlew`, `xcodebuild`, …) leads its own process group. Cancelling sends `SIGTERM` to the current group, which also stops the Gradle client so its daemon cancels the build, then marks the run `cancelled`. The emulator is started detached in its own session, so it outlives the run and the app.
 - **Logs:** output goes to `<app log dir>/<branch>-<target>.log` (`~/Library/Logs/com.philippschumann.github-magic/` on macOS), for people to read. Status comes from memory, not from the log's last line.
 - **Events:** state changes go out on a broadcast channel, which the tray menu and notifications subscribe to.
 - **Persistence:** runs are lost when the app quits. Quitting cancels them first.

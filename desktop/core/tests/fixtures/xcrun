@@ -1,0 +1,5 @@
+#!/bin/sh
+d="$(dirname "$0")"
+echo "xcrun $*" >> "$d/calls.log"
+[ "$1 $2 $3 $4" = "devicectl list devices --json-output" ] && cp "$d/devices.json" "$5"
+exit 0

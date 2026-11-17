@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "gradlew $* serial=$ANDROID_SERIAL" >> calls.log
+if [ ! -f .ran ]; then touch .ran; echo 'INSTALL_FAILED_VERSION_DOWNGRADE'; exit 1; fi
+echo 'BUILD SUCCESSFUL'

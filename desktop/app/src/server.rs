@@ -4,17 +4,16 @@
 use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Output, Stdio};
+use std::sync::Arc;
 
-use github_magic_core::{MAX_FRAME, socket_path};
+use github_magic_core::{Core, MAX_FRAME, handler, socket_path};
+use serde_json::{Value, json};
+use tauri::AppHandle;
+use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::process::Command;
 
-/// shortcut: phase 1 hands every request to the Python script of this checkout; phase 2 ports the actions to core.
-const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../native-host/open_pr_in_studio.py");
-
-pub fn start() -> io::Result<()> {
+pub fn start(app: AppHandle, core: Arc<Core>) -> io::Result<()> {
     let path = socket_path();
     let _ = fs::remove_file(&path); // stale socket left by a crash
     let listener = std::os::unix::net::UnixListener::bind(&path)?;
@@ -25,11 +24,14 @@ pub fn start() -> io::Result<()> {
         let listener = UnixListener::from_std(listener).expect("inside the tokio runtime");
         loop {
             match listener.accept().await {
-                Ok((conn, _)) => drop(tauri::async_runtime::spawn(async move {
-                    if let Err(e) = handle(conn).await {
-                        eprintln!("github-magic: connection failed: {e}");
-                    }
-                })),
+                Ok((conn, _)) => {
+                    let (app, core) = (app.clone(), core.clone());
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = handle(conn, app, core).await {
+                            eprintln!("github-magic: connection failed: {e}");
+                        }
+                    });
+                }
                 Err(e) => eprintln!("github-magic: accept failed: {e}"),
             }
         }
@@ -37,40 +39,38 @@ pub fn start() -> io::Result<()> {
     Ok(())
 }
 
-async fn handle(mut conn: UnixStream) -> io::Result<()> {
-    let mut frame = vec![0; 4];
-    conn.read_exact(&mut frame).await?;
-    let len = u32::from_ne_bytes(frame[..4].try_into().unwrap()) as usize;
+async fn handle(mut conn: UnixStream, app: AppHandle, core: Arc<Core>) -> io::Result<()> {
+    let mut len = [0; 4];
+    conn.read_exact(&mut len).await?;
+    let len = u32::from_ne_bytes(len) as usize;
     if len > MAX_FRAME {
         return Err(io::Error::other(format!("request of {len} bytes is over the 1 MB limit")));
     }
-    frame.resize(4 + len, 0);
-    conn.read_exact(&mut frame[4..]).await?;
-    let reply = match python(&frame).await {
-        Ok(out) if !out.stdout.is_empty() => out.stdout, // already a reply frame
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("github-magic: python3 replied nothing: {stderr}");
-            error_frame(stderr.trim().lines().last().unwrap_or("python3 exited without a reply"))
-        }
-        Err(e) => error_frame(&format!("couldn't run python3: {e}")),
+    let mut request = vec![0; len];
+    conn.read_exact(&mut request).await?;
+    let reply = match serde_json::from_slice::<Value>(&request) {
+        Ok(msg) if msg["action"] == "choose_folder" => choose_folder(&app, &core, &msg["current"]).await,
+        // On a blocking thread: the tools it runs (git fetch, …) take a while.
+        Ok(msg) => tauri::async_runtime::spawn_blocking(move || handler::handle(&core, &msg))
+            .await
+            .unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => json!({ "ok": false, "error": format!("invalid request: {e}") }),
     };
-    conn.write_all(&reply).await
+    let reply = reply.to_string();
+    conn.write_all(&(reply.len() as u32).to_ne_bytes()).await?;
+    conn.write_all(reply.as_bytes()).await
 }
 
-/// Runs the script on the request frame unchanged; its stdout is the reply frame.
-async fn python(frame: &[u8]) -> io::Result<Output> {
-    let mut child = Command::new("/usr/bin/python3")
-        .arg(SCRIPT)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child.stdin.take().expect("piped").write_all(frame).await?;
-    child.wait_with_output().await
-}
-
-fn error_frame(error: &str) -> Vec<u8> {
-    let body = serde_json::json!({ "ok": false, "error": error }).to_string();
-    [&(body.len() as u32).to_ne_bytes()[..], body.as_bytes()].concat()
+/// The native folder dialog: a browser's own file picker never reveals the absolute path.
+async fn choose_folder(app: &AppHandle, core: &Core, current: &Value) -> Value {
+    let mut dialog = app.dialog().file().set_title("Worktree folder");
+    if let Some(dir) = current.as_str().map(|dir| core.paths.expand_user(dir)).filter(|dir| dir.is_dir()) {
+        dialog = dialog.set_directory(dir);
+    }
+    let (chosen, choice) = tokio::sync::oneshot::channel();
+    dialog.pick_folder(move |folder| drop(chosen.send(folder)));
+    match choice.await.ok().flatten().and_then(|folder| folder.into_path().ok()) {
+        Some(path) => json!({ "ok": true, "path": path }),
+        None => json!({ "ok": false, "cancelled": true }),
+    }
 }
