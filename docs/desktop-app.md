@@ -10,7 +10,7 @@ Plan for replacing the Python native helper (`native-host/open_pr_in_studio.py`)
 | Stack | [Tauri 2](https://v2.tauri.app): Rust core, native tray menu, plain HTML/JS settings window |
 | Platforms | macOS first. Linux and Windows come later, behind one platform module |
 | Port | In steps: the app first hands every message to the Python script, then the actions move to Rust one at a time, then the script is deleted |
-| Settings | Owned by the app and edited in its Settings window. The extension stores none. Each repo has its own app ID (Android) or scheme (iOS) |
+| Settings | Owned by the app: its `settings.json` is the only copy, so there is nothing to sync. One shared settings page is both the app's Settings window and the extension's options page, and both read and write the app's store. The extension stores none. Each repo has its own app ID (Android) or scheme (iOS) |
 | Tray menu (v1) | Current run per device (PR, state, elapsed time) with Cancel and Show log, last result per device, Update, Settings…, Quit |
 | Notifications | One per finished run, with a Show log button |
 | Install | Homebrew tap (`brew install --cask philippschumann/tap/github-magic`) and a `.dmg` on GitHub releases |
@@ -27,8 +27,10 @@ Out of scope for v1: worktree cleanup, a PR list, Chromium browsers other than C
 flowchart LR
   subgraph Browser
     CS["content.js<br/>buttons on PR pages"] -->|runtime.sendMessage| BG[background.js]
+    OPT["settings page<br/>(options page)"]
   end
   BG -->|"native messaging<br/>(stdio, one message)"| BR[github-magic-bridge]
+  OPT -->|native messaging| BR
   BR -->|"local socket<br/>(same framing)"| SRV
   subgraph APP["Github Magic.app"]
     SRV[socket server] --> CORE[core]
@@ -66,6 +68,7 @@ The Tauri app. It runs without a Dock icon (`LSUIElement`) and shows only the tr
 
 - **Socket server:** a tokio `UnixListener` at `<per-user temp dir>/github-magic.sock`, created with mode `0600`. The per-user temp dir comes from `confstr(_CS_DARWIN_USER_TEMP_DIR)` and is private to the user. A Unix socket path can be at most 104 bytes, and `~/Library/Application Support/<bundle id>/…` can go over that. A stale socket file is removed before `bind`. Each connection is handled in its own task, so a slow `git fetch` never blocks status polls.
 - **Single instance:** `tauri-plugin-single-instance`. A second launch opens the settings window.
+- **Settings changes:** every write goes through `core::settings`, which broadcasts the change. The app's settings window re-renders on it.
 - **Start at login:** `tauri-plugin-autostart`, switched on by default and toggled in Settings.
 - **Native messaging registration:** the app writes the browsers' host manifests at every start, so they always point at the running app's bridge (see below). This replaces `install.sh`.
 - **Quitting:** if a run is going, the app asks "1 run in progress. Quit and cancel it?" and cancels it on yes. Emulators and simulators keep running. The same check runs before an update restarts the app.
@@ -133,9 +136,21 @@ A native menu, built with Tauri's tray API:
 
 When a run finishes there's one notification: "Started on Pixel 10" or "Failed: installDebug failed on emulator-5554", titled `<worktree> on <target>`, with a Show log button. Cancelled runs don't notify.
 
-### Settings window
+### Settings page
 
-A plain HTML/JS page (`desktop/app/ui/`, styled like today's `options.html`), talking to the core through Tauri commands that only this window may call (Tauri capabilities). Its CSP is `default-src 'self'`.
+One plain HTML/JS page, styled like today's `options.html`, serves both places:
+
+- **Where it lives:** `settings/` at the repo root, so it is part of the extension. The extension uses it as its options page (`options_ui.page: "settings/settings.html"`, `open_in_tab: true`, since the repo list needs more room than the embedded panel). The app loads the same folder as its Settings window (`build.frontendDist: "../../settings"`, `app.withGlobalTauri: true`, so plain JS reaches `invoke` without a bundler).
+- **Transport:** `settings/transport.js` is the only part that differs. Its `call(msg)` uses `window.__TAURI__.core.invoke("settings", { msg })` in the app and `chrome.runtime.sendNativeMessage("github_magic", { ...msg, protocol })` in the extension. Both reach the same core handler, so both windows use the same actions (`settings`, `set`, `choose_folder`, `add_repo`, `remove_repo`, see Protocol) and the same validation.
+- **Saving:** every change saves at once with one `set` per field, as today's options page does. Two windows open at once never overwrite each other's other fields.
+- **Staying current:**
+  - The app window re-renders on the core's change broadcast.
+  - The extension page reads `settings` again whenever it becomes visible (`visibilitychange`).
+  - The PR buttons already read settings fresh through `detect` on every click.
+- **App missing:** the extension page disables its fields and shows "Install Github Magic", linking to the README's install section, when native messaging reports the host missing. When the app is installed, the bridge starts it, so the page only shows the bridge's "Github Magic isn't running" error if the app fails to start.
+- **No inline scripts and no remote content:** this fits both the extension's MV3 CSP and the app window's `default-src 'self'`. In the app only the Settings window may call the `settings` command (Tauri capabilities).
+
+The page shows:
 
 - **Repos:** a list of `owner/name` → main clone folder, platform (detected), and app ID (Android) or scheme (iOS). Add… opens a folder picker and reads `owner/name` from the clone's `origin` URL. Remove deletes the entry.
 - **Worktree folder:** a text field and a Choose… button.
@@ -156,10 +171,8 @@ A plain HTML/JS page (`desktop/app/ui/`, styled like today's `options.html`), ta
 
 All in phase 3:
 
-- **`background.js`:**
-  - adds `protocol: 1` to every request and stops merging settings from `chrome.storage`
-  - the toolbar button sends `{action: "open_settings"}`
-- **`options.html`, `options.js`:** deleted, and `options_ui` is removed from `manifest.json`.
+- **`background.js`:** adds `protocol: 1` to every request and stops merging settings from `chrome.storage`. The toolbar button still opens the options page.
+- **`options.html`, `options.js`:** replaced by the shared settings page. `options_ui.page` in `manifest.json` points at `settings/settings.html`.
 - **`content.js`:**
   - `getSettings` reads from the `settings` field of `detect` instead of `chrome.storage`
   - the IDE, emulator and simulator pickers save with `{action: "set", key, value}`
@@ -182,10 +195,13 @@ All in phase 3:
 | Action | Request fields | Reply |
 |---|---|---|
 | `detect` | `repo` | `platform`, `repoConfigured`, `ides`, `iosIdes`, `avds`, `simulators` (`[{id, label}]`), `adb`, `settings` (`worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`) |
-| `set` | `key` (one of the five above), `value` | `{ok}` |
+| `settings` | none | the whole of `settings.json`, plus the choices: `ides`, `iosIdes`, `avds`, `simulators`, `adb` |
+| `set` | `key`, `value`, and `repo` for `appId` and `scheme` | `{ok}`, or `{ok: false, error}` naming what's wrong |
 | `choose_folder` | `current` | `{ok, path}` or `{ok: false, cancelled: true}` |
-| `add_repo` | `repo` | `{ok}`, cancelled, or an error if the chosen clone's `origin` isn't `repo` |
-| `open_settings` | none | `{ok}` |
+| `add_repo` | `repo` from a PR page; none from the settings page, which takes `owner/name` from the chosen clone's `origin` | `{ok, repo}`, cancelled, or an error if the chosen clone's `origin` isn't `repo` |
+| `remove_repo` | `repo` | `{ok}` |
+
+`set` takes these keys: `worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`, `phoneModels`, `openAtLogin`, and per repo `appId` (Android) or `scheme` (iOS). A repo's folder is set only through `add_repo`'s native folder picker, never from a request field.
 | `open`, `claude` | `repo`, `pr`, `branch`, `title` | `{ok, path}` |
 | `phone`, `emulator`, `iphone`, `simulator` | `repo`, `pr`, `branch`, `title` | `{ok, path, run}` |
 | `status` | `run` | `{ok, state, message?, log}` |
@@ -212,11 +228,16 @@ The app stores settings in `<app config dir>/settings.json` (`~/Library/Applicat
 
 The simulator is stored by UDID, not by label, so renamed or same-named simulators don't get mixed up.
 
-Every write is validated, whether from the settings window, `set` or `add_repo`:
+Every write is validated in the core, whichever window or PR page it comes from:
 - `worktreeDir` must be an absolute, existing folder.
 - `ide` and `iosIde` must be installed.
 - `emulator` must be in the AVD list, and `simulator` must be a UDID `simctl` lists.
+- `phoneModels` must be a list of non-empty `adb -s` selectors without spaces, for example `model:Pixel_10`.
+- `openAtLogin` must be a boolean.
+- `appId` must be a valid Android application ID, and `scheme` a non-empty name.
 - A repo path must be a git clone whose `origin` points at that repo.
+
+Writes replace `settings.json` atomically (write a temp file, then rename), so a crash never leaves half a file.
 
 ## Native messaging registration
 
@@ -240,14 +261,17 @@ At every start the app writes:
   - the emulator must be in the AVD list
   - the simulator must be a listed UDID
   - a run ID is looked up only in memory
-  - `set` takes only five keys, each validated
+  - `set` takes only the listed keys, each validated
 - **No shell, no AppleScript:** every command is a `Command` with separate arguments.
 - **Frames are capped at 1 MB** in the bridge and the server.
-- **Settings window:** no remote content. Only that window may call the settings commands.
+- **Settings page:** no remote content. In the app only the Settings window may call the `settings` command. In the browser only the extension's own pages reach the host, through the IDs in the host manifests.
 
 ## Repo layout
 
 ```
+settings/               the settings page, shared by the extension (options page) and the app (Settings window)
+  settings.html, settings.js, settings.css
+  transport.js          Tauri invoke in the app, native messaging in the extension
 desktop/
   Cargo.toml            workspace; version shared with manifest.json
   core/                 library: handler, git, detect, runs, android, ios, claude, settings, platform/
@@ -258,11 +282,10 @@ desktop/
     tauri.conf.json     identifier com.philippschumann.github-magic, ad-hoc signing ("signingIdentity": "-")
     capabilities/
     icons/              tray icon as a monochrome template image
-    ui/                 settings.html, settings.js
 docs/desktop-app.md
 ```
 
-The extension stays at the repo root. `web-ext-config.mjs` ignores `desktop/**` and `docs/**`, and `.gitignore` gains `desktop/target/`.
+The extension stays at the repo root, and `settings/` belongs to both the extension and the app. `web-ext-config.mjs` ignores `desktop/**` and `docs/**`, and `.gitignore` gains `desktop/target/`.
 
 ## Build, release and install
 
@@ -324,9 +347,9 @@ Each phase is its own PR. Don't cut a release until phase 5. Until then, main is
 
    The handler sends ported actions to Rust and the rest to Python. The Rust side reads a hand-written `settings.json` in the final format, so `repos`, the per-repo app ID and scheme, and `phoneModels` are there from the start. The settings the extension still sends with each request override it until phase 3. The tray run lines and notifications come with the run manager. The launcher activity lookup replaces `START_ACTIVITY`.
    - Done when nothing reaches Python.
-3. **Settings in the app, extension switched over.**
-   - Settings window, `set`, `choose_folder`, `add_repo`, `open_settings`, protocol 1, and all the extension changes above.
-   - Done when the extension stores nothing and the options page is gone.
+3. **Settings in the app, shared settings page, extension switched over.**
+   - The shared `settings/` page as the extension's options page and the app's Settings window, `settings`, `set`, `choose_folder`, `add_repo`, `remove_repo`, the change broadcast, protocol 1, and all the extension changes above.
+   - Done when the extension stores nothing, the same page works in both places, and a change made in one shows up in the other.
 4. **Python removed.**
    - Delete `native-host/` and `install.sh`.
    - Rewrite the README: install, first launch, settings, what the actions do, logs.
@@ -341,7 +364,8 @@ Each phase is its own PR. Don't cut a release until phase 5. Until then, main is
   - The stand-in tools are shell scripts and are copied over unchanged.
 - **New tests:**
   - launcher activity lookup (stand-in `adb`)
-  - settings validation
+  - settings validation, for every `set` key
+  - the change broadcast after each write
   - `add_repo` origin check
   - protocol mismatch replies
   - the per-repo lock
@@ -350,7 +374,8 @@ Each phase is its own PR. Don't cut a release until phase 5. Until then, main is
   - every button on a real PR of an Android and an iOS repo
   - cancel from the tray, notification and Show log
   - quit with a run going
-  - settings round trip
+  - settings round trip: change each setting in the extension's page and see it in the app's window, and the other way round
+  - the extension's settings page with the app not installed
   - phase 5: brew install with the first-launch approval, and an update from the previous release
 
 ## Linux and Windows later
@@ -377,4 +402,5 @@ Everything that differs between systems sits in `core::platform`, so adding one 
 3. **Updating an unsigned app:** confirm that an update installed by Tauri's updater on an ad-hoc-signed app starts without a new Gatekeeper prompt. Check in phase 5.
 4. **Folder access after updates:** each update changes the ad-hoc signature, so macOS asks again for access to worktrees in Documents, Desktop or Downloads. This is accepted; other folders aren't affected.
 5. **Live menu text:** check that tray menu text updates while the menu is open on macOS. If it doesn't, show the start time instead of the elapsed time.
-6. **Linux tray:** GNOME shows tray icons only with the AppIndicator extension. This matters only once Linux is added.
+6. **Shared settings folder:** check that `tauri build` bundles `frontendDist` from outside `desktop/app`, and that `cargo tauri dev` serves it without a dev server. If not, a build step copies `settings/` into the app. Check in phase 3.
+7. **Linux tray:** GNOME shows tray icons only with the AppIndicator extension. This matters only once Linux is added.
