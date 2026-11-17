@@ -12,6 +12,11 @@ import tempfile
 import time
 import unittest
 
+# The tests run against config.example.py, never your own config.py.
+here = os.path.dirname(os.path.abspath(__file__))
+config_spec = importlib.util.spec_from_file_location("config", os.path.join(here, "config.example.py"))
+sys.modules["config"] = importlib.util.module_from_spec(config_spec)
+config_spec.loader.exec_module(sys.modules["config"])
 spec = importlib.util.spec_from_file_location("host", os.path.join(os.path.dirname(os.path.abspath(__file__)), "open_pr_in_studio.py"))
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)

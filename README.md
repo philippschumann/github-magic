@@ -36,7 +36,7 @@ Every action first checks the PR out as a git worktree named `<repo>-<branch>` i
      read "K?AMO JWT issuer: " && read -s "S?AMO JWT secret: " && echo && WEB_EXT_API_KEY="$K" WEB_EXT_API_SECRET="$S" npx web-ext sign; unset K S
      ```
 
-3. Add your repos to `REPOS` at the top of [native-host/open_pr_in_studio.py](native-host/open_pr_in_studio.py): GitHub repo → local main clone. The helper refuses any repo that isn't listed.
+3. Copy [native-host/config.example.py](native-host/config.example.py) to `native-host/config.py` (gitignored) and fill in your repos (`REPOS`: GitHub repo → local main clone) and app. The helper refuses any repo that isn't listed.
 
 ## First use
 
@@ -55,7 +55,7 @@ You can change all of these later in the extension's settings (click the extensi
   - Open in your IDE opens the window first and updates while it loads.
   - Run on phone / emulator / iPhone / simulator updates first, then builds.
   - If the branch is gone from `origin` (usually deleted after the PR was merged), they stop with a "Branch not found" dialog before opening or building anything. If `origin` can't be reached, they go ahead as usual.
-- **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phone order is Pixel 10, then Pixel 6, then any other phone. The emulator is the one you chose, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
+- **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phones listed in `PHONE_MODELS` come first, in that order, then any other phone. The emulator is the one you chose, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
   - A new run cancels the one still going on that device, whatever PR it was for.
   - If the device refuses the build as a downgrade or because of a different signing key, the app is uninstalled and installed again, which wipes its data.
   - Logs: `~/Library/Logs/github-pr-quick-filters/`.
@@ -65,7 +65,7 @@ You can change all of these later in the extension's settings (click the extensi
   - Cancelling, the "Installing…" button, the notification and the logs work as for Android.
 - **Claude:** reopens the newest unarchived session in that folder or starts a new one.
 
-The app id, start activity, phone order and iOS scheme are constants at the top of the helper script. The iOS app and its bundle id come from the scheme's build settings.
+The app id, start activity, phone order and iOS scheme are set in `native-host/config.py`. The iOS app and its bundle id come from the scheme's build settings.
 
 ## Releases
 

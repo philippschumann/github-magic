@@ -6,7 +6,7 @@ Receives {"repo": "owner/name", "pr": 123, "action": "open|phone|emulator|iphone
 "title": ..., "ide": "<IDES key>", "iosIde": "<IOS_IDES key>", "emulator": "<AVD name>", "simulator": "<simulators() key>"} from the browser
 extension, which reads the PR's branch and title from the page. Replies {"ok": true, "path": ...} or
 {"ok": false, "error": ...}, plus a "title" for errors the extension shows in a dialog (the PR's branch is gone).
-Only repos listed in REPOS are accepted. A repo whose main clone has an Xcode project at its root is an iOS repo:
+Only repos listed in REPOS (config.py) are accepted. A repo whose main clone has an Xcode project at its root is an iOS repo:
 it opens in "iosIde" and runs on an iPhone or simulator; any other repo is an Android repo and opens in "ide". {"action": "detect"} lists the repo's platform, the installed IDEs of both platforms, the
 emulators and simulators, and whether
 the repo's Android SDK has adb.
@@ -24,11 +24,11 @@ import sys
 import time
 from urllib.parse import quote
 
-# GitHub repo -> local main clone. Worktrees are created next to it as <clone>-<branch>.
-REPOS = {
-    "example/MyAndroidApp": "~/code/MyAndroidApp",
-    "example/MyiOSApp": "~/code/MyiOSApp",
-}
+CONFIG = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.py")
+try:  # your repos and app; see config.example.py
+    from config import REPOS, IOS_SCHEME, APP_ID, START_ACTIVITY, PHONE_MODELS
+except ImportError:
+    REPOS, IOS_SCHEME, APP_ID, START_ACTIVITY, PHONE_MODELS = {}, "", "", "", []
 # gitignored files a fresh worktree needs to build.
 COPY_FILES = ["local.properties"]
 # IDE name -> app bundles to look for in APP_DIRS; the first one found is opened.
@@ -46,11 +46,6 @@ APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]  # ~/Applicat
 RUN_TARGETS = ("phone", "emulator", "iphone", "simulator")
 ACTIONS = ("open", "claude", *RUN_TARGETS)
 
-# Device runs. iOS: the scheme's Debug build; its app and bundle id come from the build settings.
-IOS_SCHEME = "MyApp"
-APP_ID = "com.example.myapp"
-START_ACTIVITY = APP_ID + "/com.example.myapp.MainActivity"
-PHONE_MODELS = ["model:Pixel_10", "model:Pixel_6"]  # preferred in this order, else any other phone
 AVD_DIR = os.path.expanduser("~/.android/avd")  # each emulator has a <name>.ini here
 BOOT_TIMEOUT = 300
 LOG_DIR = os.path.expanduser("~/Library/Logs/github-pr-quick-filters")
@@ -289,7 +284,7 @@ def handle(msg):
     if action == "detect":
         return detect(repo)
     if repo not in REPOS:
-        raise ValueError(f"{repo} is not configured in {os.path.abspath(__file__)}")
+        raise ValueError(f"{repo} is not configured in {CONFIG}")
     if not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0:
         raise ValueError(f"invalid PR number: {pr!r}")
     if action not in ACTIONS:
