@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{calls, fixture, paths, tmp, write};
-use github_magic_core::runs::{self, Run, State};
-use github_magic_core::settings::Config;
+use common::{calls, fixture, tmp, write};
+use github_magic_core::runs::{self, Launch, Run, State};
 use github_magic_core::{Core, android};
 
 /// A worktree with an Android SDK whose adb is the stand-in.
@@ -25,12 +24,8 @@ impl Fixture {
         let worktree = tmp.join("worktree");
         write(worktree.join("local.properties"), &format!("sdk.dir={}\n", tmp.join("sdk").display()));
         write(tmp.join("sdk/platform-tools/activities.txt"), ACTIVITIES);
-        let config = Config {
-            app_id: "com.example.myapp".into(),
-            phone_models: vec!["model:Pixel_10".into(), "model:Pixel_6".into()],
-            ..Config::default()
-        };
-        Self { core: Arc::new(Core::new(config, paths(&tmp))), tmp, adb, worktree }
+        let core = common::core(&tmp, |s| s.phone_models = vec!["model:Pixel_10".into(), "model:Pixel_6".into()]);
+        Self { core, tmp, adb, worktree }
     }
 
     /// What `adb devices -l` and `adb devices` list.
@@ -42,11 +37,12 @@ impl Fixture {
 
     /// A run that isn't going, for calling its steps one by one.
     fn run(&self, target: &'static str) -> Run {
-        Run::new(&self.core.paths.log_dir, target, 1, "feat/a", &self.worktree, "").unwrap()
+        Run::new(&self.core.paths.log_dir, 0, target, 1, "feat/a", &self.worktree, "").unwrap()
     }
 
     fn start(&self, branch: &str) -> Arc<Run> {
-        runs::start(&self.core, "phone", 1, branch, &self.worktree, "", "phone").unwrap()
+        let launch = Launch { target: "phone", pr: 1, branch, path: &self.worktree, device: "", label: "phone", app: "com.example.myapp" };
+        runs::start(&self.core, launch).unwrap()
     }
 
     fn adb_calls(&self) -> Vec<String> {
@@ -184,7 +180,7 @@ fn cancelled_run_stops_its_build_and_says_so() {
     run.cancel();
     assert_eq!(finished(&run), State::Cancelled);
     assert!(std::fs::read_to_string(&run.log).unwrap().ends_with("CANCELLED\n"));
-    assert_eq!(f.core.runs.by_log(&run.log).unwrap().status()["state"], "cancelled");
+    assert_eq!(f.core.runs.get(run.id).unwrap().status()["state"], "cancelled");
 }
 
 fn make_executable(path: &Path) {

@@ -55,19 +55,47 @@ pub fn parse_simulators(json: &str) -> Vec<(String, String)> {
     found
 }
 
-/// The repo's platform, installed IDEs, emulators and simulators, and whether adb is in the repo's Android SDK
-/// (sdk.dir), which phone and emulator runs use.
+/// What the settings can choose from: installed IDEs, emulators and simulators.
+pub fn choices(paths: &Paths) -> Value {
+    let names = |ides| installed_ides(paths, ides).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+    let simulators = simulators(paths).into_iter().map(|(label, udid)| json!({ "id": udid, "label": label }));
+    json!({ "ides": names(IDES), "iosIdes": names(IOS_IDES), "avds": avds(paths), "simulators": simulators.collect::<Vec<_>>() })
+}
+
+/// "ios" for a repo whose main clone has an Xcode project at its root, else "android".
+pub fn platform(root: Option<&Path>) -> &'static str {
+    if root.and_then(xcode_project).is_some() { "ios" } else { "android" }
+}
+
+/// What a PR page needs: whether the repo is added, its platform, whether adb is in its Android SDK (sdk.dir, which
+/// phone and emulator runs use), the choices and what is chosen.
 pub fn detect(core: &Core, repo: &Value) -> Value {
-    let root = repo.as_str().and_then(|repo| core.config.repos.get(repo)).map(|path| core.paths.expand_user(path));
+    let settings = core.settings.get();
+    let root = repo.as_str().and_then(|repo| settings.repos.get(repo)).map(|repo| core.paths.expand_user(&repo.path));
     let sdk = root.as_deref().and_then(|root| android::sdk_dir(root).ok());
-    let names = |ides| installed_ides(&core.paths, ides).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
-    json!({
+    let mut reply = choices(&core.paths);
+    reply.as_object_mut().expect("an object").extend(json!({
         "ok": true,
-        "platform": if root.as_deref().and_then(xcode_project).is_some() { "ios" } else { "android" },
-        "ides": names(IDES),
-        "iosIdes": names(IOS_IDES),
-        "avds": avds(&core.paths),
-        "simulators": simulators(&core.paths).into_iter().map(|(label, _)| label).collect::<Vec<_>>(),
+        "repoConfigured": root.is_some(),
+        "platform": platform(root.as_deref()),
         "adb": sdk.is_some_and(|sdk| is_executable(&sdk.join("platform-tools/adb"))),
-    })
+        "settings": {
+            "worktreeDir": settings.worktree_dir,
+            "ide": settings.ide,
+            "iosIde": settings.ios_ide,
+            "emulator": settings.emulator,
+            "simulator": settings.simulator,
+        },
+    }).as_object().expect("an object").clone());
+    reply
+}
+
+/// What the settings page needs: every setting, each repo's platform, and the choices.
+pub fn settings(core: &Core) -> Value {
+    let settings = core.settings.get();
+    let platforms: serde_json::Map<String, Value> =
+        settings.repos.iter().map(|(name, repo)| (name.clone(), platform(Some(&core.paths.expand_user(&repo.path))).into())).collect();
+    let mut reply = choices(&core.paths);
+    reply.as_object_mut().expect("an object").extend(json!({ "ok": true, "settings": settings, "platforms": platforms }).as_object().expect("an object").clone());
+    reply
 }

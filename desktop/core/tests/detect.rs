@@ -6,14 +6,12 @@ use std::sync::Arc;
 
 use common::{fixture, paths, tmp, write};
 use github_magic_core::platform::{IDES, installed_ides};
-use github_magic_core::settings::Config;
 use github_magic_core::{Core, detect, handler};
 use serde_json::json;
 
 fn core(tmp: &Path) -> Arc<Core> {
     fs::create_dir_all(tmp.join("clone")).unwrap();
-    let repos = [("o/r".to_owned(), tmp.join("clone").to_str().unwrap().to_owned())].into();
-    Arc::new(Core::new(Config { repos, ..Config::default() }, paths(tmp)))
+    common::core(tmp, |s| s.repos.entry("o/r".into()).or_default().path = tmp.join("clone").to_str().unwrap().into())
 }
 
 #[test]
@@ -28,7 +26,7 @@ fn lists_installed_ides_in_order_with_their_app() {
         ("VS Code", tmp.join("Applications/Visual Studio Code.app")),
     ];
     assert_eq!(installed_ides(&core.paths, IDES), found);
-    let reply = handler::handle(&core, &json!({ "action": "detect" }));
+    let reply = handler::handle(&core, &json!({ "action": "detect", "protocol": 1 }));
     assert_eq!(reply["ides"], json!(["IntelliJ IDEA", "VS Code"]));
     assert_eq!(reply["iosIdes"], json!(["Xcode", "VS Code"]));
 }
@@ -44,6 +42,18 @@ fn repo_with_an_xcode_project_at_its_root_is_ios() {
     assert_eq!(detect::detect(&core, &json!("evil/repo"))["platform"], "android");
     fs::create_dir_all(clone.join("App.xcworkspace")).unwrap();
     assert_eq!(detect::xcode_project(&clone), Some(clone.join("App.xcworkspace")));
+}
+
+#[test]
+fn says_whether_the_repo_is_added_and_what_is_chosen() {
+    let tmp = tmp();
+    let core = core(&tmp);
+    core.settings.update(|s| s.emulator = "Pixel_9".into()).unwrap();
+    let reply = detect::detect(&core, &json!("o/r"));
+    assert_eq!(reply["repoConfigured"], true);
+    assert_eq!(reply["settings"], json!({ "worktreeDir": "", "ide": "", "iosIde": "", "emulator": "Pixel_9", "simulator": "" }));
+    assert_eq!(detect::detect(&core, &json!("evil/repo"))["repoConfigured"], false);
+    assert_eq!(detect::detect(&core, &json!(null))["repoConfigured"], false);
 }
 
 #[test]
@@ -68,7 +78,7 @@ fn lists_emulators_by_their_ini_files() {
     for name in ["Pixel_9_API_35.ini", "Pixel_9_API_35.avd/config.ini", "Medium_Phone_API_36.1.ini", "gradle-managed/x"] {
         write(core.paths.avd_dir.join(name), "");
     }
-    let reply = handler::handle(&core, &json!({ "action": "detect" }));
+    let reply = handler::handle(&core, &json!({ "action": "detect", "protocol": 1 }));
     assert_eq!(reply["avds"], json!(["Medium_Phone_API_36.1", "Pixel_9_API_35"]));
 }
 

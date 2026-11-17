@@ -48,8 +48,8 @@ function render() {
   anchor.after(bar);
 }
 
-// PR page actions: an IDE dropdown and a "Claude" button. The native host (native-host/) checks the PR out in a
-// worktree and acts on it.
+// PR page actions: an IDE dropdown and a "Claude" button. The Github Magic app (desktop/) checks the PR out in a
+// worktree and acts on it. It also holds the settings: `detect` returns them with every look.
 const MENU_ID = "pr-open-locally";
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)/;
 const IDE_LABEL = "IDE"; // the dropdown's label until the IDE is known, then that IDE's name
@@ -62,7 +62,7 @@ const IDE_PICK = {
 };
 // Quiet: leaves the button as it is, so a running device install keeps showing "Installing…".
 const OPEN = { action: "open", quiet: true }; // labelled "Open in <IDE>"
-// Per platform of the repo, shown only when the native host finds adb (Android) or Xcode (iOS). Device runs continue
+// Per platform of the repo, shown only when the app finds adb (Android) or Xcode (iOS). Device runs continue
 // in the background; the button polls until the app is installed and started. A run with `pick` needs one of the
 // detected `list` (emulators, simulators): the first run asks which, and it is saved as the `key` setting.
 const RUN = { busy: "Installing…", done: "Installed", poll: true };
@@ -85,6 +85,7 @@ const RUNS = {
 const CLAUDE_LABEL = "Claude";
 const CLAUDE = { action: "claude", label: "Open Claude session", busy: "Opening…", done: "Opened" };
 const POLL_MS = 3000;
+const INSTALL_URL = "https://github.com/philippschumann/github-magic#install";
 const TRIANGLE_DOWN = "m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z";
 
 // GitHub's triangle-down octicon, built as DOM nodes (no innerHTML).
@@ -180,6 +181,14 @@ function send(msg, cb) {
   });
 }
 
+// What the app knows about the repo: whether it is added, its platform, the choices (IDEs, emulators, simulators)
+// and the settings, as `found.settings`.
+const detect = (repo, cb) => send({ action: "detect", repo }, cb);
+// Saves one setting in the app.
+const save = (key, value, cb) => send({ action: "set", key, value }, cb);
+// Errors the app gives a title (the PR's branch is gone, an update is needed) get a dialog; any other an alert.
+const report = (label, err, title) => (title ? openDialog({ title, text: err, primary: "OK" }) : alert(`${label} failed:\n${err}`));
+
 // Runs one action; `btn` shows its progress and returns to `idle` afterwards. A newer click on the same button wins,
 // except quiet actions, which never touch the button and only report errors.
 function runAction(m, a, btn, idle) {
@@ -190,9 +199,7 @@ function runAction(m, a, btn, idle) {
     branch: [...branches].at(-1)?.textContent ?? "",
     title: document.querySelector('[data-component="PageHeader"] h1 .markdown-title')?.textContent ?? "",
   };
-  // Errors the native host gives a title (the PR's branch is gone) get a dialog; any other an alert.
-  const report = (err, title) => (title ? openDialog({ title, text: err, primary: "OK" }) : alert(`${a.label} failed:\n${err}`));
-  if (a.quiet) return send(msg, (res, err) => err && report(err, res?.title));
+  if (a.quiet) return send(msg, (res, err) => err && report(a.label, err, res?.title));
   const token = (btn.run = {});
   const show = (text, title = "") => {
     if (btn.run !== token) return;
@@ -202,7 +209,7 @@ function runAction(m, a, btn, idle) {
   const fail = (err, title) => {
     if (btn.run !== token) return;
     show(idle, err);
-    report(err, title);
+    report(a.label, err, title);
   };
   const finish = (title) => {
     show(a.done, title);
@@ -212,13 +219,13 @@ function runAction(m, a, btn, idle) {
   send(msg, (res, err) => {
     if (err) return fail(err, res?.title);
     if (!a.poll) return finish(res.path);
-    const poll = () => send({ action: "status", log: res.log }, (st, err2) => {
+    const poll = () => send({ action: "status", run: res.run }, (st, err2) => {
       if (btn.run !== token) return;
       if (err2) return fail(err2);
       if (st.state === "running") return setTimeout(poll, POLL_MS);
       if (st.state === "started") return finish(st.message);
       if (st.state === "cancelled") return show(idle, "Cancelled: a newer run took over");
-      fail(`${st.message}\nLog: ${res.log}`);
+      fail(`${st.message}\nLog: ${st.log}`);
     });
     setTimeout(poll, POLL_MS);
   });
@@ -241,26 +248,35 @@ function renderPrMenu() {
   const studio = makeButton(IDE_LABEL, true);
   studio.setAttribute("aria-haspopup", "menu");
   studio.setAttribute("aria-expanded", "false");
-  getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
-    if (!err && studio.label.textContent === IDE_LABEL) studio.label.textContent = ideFor(found, s) ?? IDE_LABEL;
-  }));
+  detect(m[1], (found, err) => {
+    // Without the app nothing here works: offer to install it instead.
+    if (found?.missing) return root.replaceChildren(installLink());
+    if (!err && studio.label.textContent === IDE_LABEL) studio.label.textContent = ideFor(found) ?? IDE_LABEL;
+  });
   const list = document.createElement("div");
   list.setAttribute("role", "menu");
   list.setAttribute("aria-label", IDE_LABEL);
   list.hidden = true;
-  // Items are built on each open from what is installed now: until a worktree folder is set there is only "Set up".
+  // Items are built on each open from what is installed and set now: a repo the app doesn't know yet only has
+  // "Add repo…", and until a worktree folder is set there is only "Set up".
   studio.addEventListener("click", () => {
     if (!list.hidden) return setMenuOpen(false);
-    getSettings((s) => send({ action: "detect", repo: m[1] }, (found, err) => {
-      if (err) return alert(err);
+    detect(m[1], (found, err) => {
+      if (err) return report(IDE_LABEL, err, found?.title);
+      const s = found.settings;
+      const again = () => studio.click();
+      if (!found.repoConfigured) {
+        list.replaceChildren(menuItem("Add repo…", () => addRepo(m[1], again)));
+        return setMenuOpen(true);
+      }
       const ios = found.platform === "ios";
       const pick = IDE_PICK[found.platform];
-      const ide = ideFor(found, s);
+      const ide = ideFor(found);
       // First click, or the chosen IDE was uninstalled: ask which one to use, then open the menu.
       if (!ide && found[pick.list].length) {
         return choose(pick.key, found[pick.list], pick, (chosen) => {
           studio.label.textContent = chosen;
-          studio.click();
+          again();
         });
       }
       const runs = (ios ? found.iosIdes.includes("Xcode") : found.adb) ? RUNS[found.platform].filter((a) => !a.pick || found[a.pick.list].length) : [];
@@ -270,34 +286,52 @@ function renderPrMenu() {
       list.replaceChildren(...(s.worktreeDir
         ? actions.map((a) => menuItem(a.label, () => {
           // First run on an emulator or simulator, or the chosen one was deleted: ask which one to use, then run.
-          if (!a.pick || found[a.pick.list].includes(s[a.pick.key])) return run(a);
+          if (!a.pick || found[a.pick.list].some((choice) => (choice.id ?? choice) === s[a.pick.key])) return run(a);
           choose(a.pick.key, found[a.pick.list], a.pick, () => run(a));
         }))
-        : [menuItem("Set up", () => openSetup(() => studio.click()))]));
+        : [menuItem("Set up", () => openSetup(again))]));
       setMenuOpen(true);
-    }));
+    });
   });
 
   const claude = makeButton(CLAUDE_LABEL);
   claude.setAttribute("aria-label", CLAUDE.label);
-  // First click asks for the worktree folder if it isn't set yet.
-  claude.addEventListener("click", () => getSettings((s) => {
+  // The first click adds the repo if the app doesn't know it, and asks for the worktree folder if it isn't set yet.
+  claude.addEventListener("click", () => detect(m[1], (found, err) => {
+    if (err) return report(CLAUDE.label, err, found?.title);
     const run = () => runAction(m, CLAUDE, claude, CLAUDE_LABEL);
-    s.worktreeDir ? run() : openSetup(run);
+    if (!found.repoConfigured) return addRepo(m[1], () => claude.click());
+    found.settings.worktreeDir ? run() : openSetup(run);
   }));
 
   root.append(studio, claude, list);
   anchor.append(root);
 }
 
-function getSettings(cb) {
-  chrome.storage.local.get(["worktreeDir", "ide", "iosIde", "emulator", "simulator"], (stored) => cb(stored || {}));
+// Shown instead of the buttons while the Github Magic app isn't installed.
+function installLink() {
+  const link = document.createElement("a");
+  link.textContent = "Install Github Magic";
+  link.href = INSTALL_URL;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.className = "btn btn-sm";
+  return link;
+}
+
+// The app asks for the repo's main clone with its folder dialog and adds it if that is a clone of `repo`.
+function addRepo(repo, onDone) {
+  send({ action: "add_repo", repo }, (res, err) => {
+    if (res?.cancelled) return;
+    if (err) return report("Add repo", err, res?.title);
+    onDone();
+  });
 }
 
 // The repo's platform's chosen IDE, if it is installed; null until one is chosen.
-function ideFor(found, s) {
+function ideFor(found) {
   const { key, list } = IDE_PICK[found.platform];
-  return found[list].includes(s[key]) ? s[key] : null;
+  return found[list].includes(found.settings[key]) ? found.settings[key] : null;
 }
 
 function menuItem(text, onClick) {
@@ -358,7 +392,8 @@ function openSetup(onDone) {
     onPrimary: (close, showError) => send({ action: "choose_folder", current: "" }, (res, err) => {
       if (res?.cancelled) return showError("");
       if (err) return showError(err);
-      chrome.storage.local.set({ worktreeDir: res.path }, () => {
+      save("worktreeDir", res.path, (_saved, err2) => {
+        if (err2) return showError(err2);
         close();
         onDone();
       });
@@ -366,14 +401,15 @@ function openSetup(onDone) {
   });
 }
 
-// First-run dialog: pick one of `options` (installed IDEs, emulators, simulators) and save it as the `key` setting.
+// First-run dialog: pick one of `options` (installed IDEs, emulators, or simulators as {id, label}) and save it as
+// the `key` setting.
 function choose(key, options, { title, text, primary }, onDone) {
   const choices = document.createElement("fieldset");
   choices.setAttribute("aria-label", title);
   choices.append(...options.map((option, i) => {
     const label = document.createElement("label");
-    const radio = Object.assign(document.createElement("input"), { type: "radio", name: key, value: option, checked: i === 0 });
-    label.append(radio, option);
+    const radio = Object.assign(document.createElement("input"), { type: "radio", name: key, value: option.id ?? option, checked: i === 0 });
+    label.append(radio, option.label ?? option);
     return label;
   }));
   openDialog({
@@ -381,9 +417,10 @@ function choose(key, options, { title, text, primary }, onDone) {
     text,
     content: choices,
     primary,
-    onPrimary: (close) => {
+    onPrimary: (close, showError) => {
       const value = choices.querySelector("input:checked").value;
-      chrome.storage.local.set({ [key]: value }, () => {
+      save(key, value, (_saved, err) => {
+        if (err) return showError(err);
         close();
         onDone(value);
       });

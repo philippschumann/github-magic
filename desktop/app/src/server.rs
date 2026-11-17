@@ -4,9 +4,11 @@
 use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use github_magic_core::{Core, MAX_FRAME, handler, socket_path};
+use github_magic_core::handler::{self, PROTOCOL};
+use github_magic_core::{Core, MAX_FRAME, settings, socket_path};
 use serde_json::{Value, json};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -49,11 +51,7 @@ async fn handle(mut conn: UnixStream, app: AppHandle, core: Arc<Core>) -> io::Re
     let mut request = vec![0; len];
     conn.read_exact(&mut request).await?;
     let reply = match serde_json::from_slice::<Value>(&request) {
-        Ok(msg) if msg["action"] == "choose_folder" => choose_folder(&app, &core, &msg["current"]).await,
-        // On a blocking thread: the tools it runs (git fetch, …) take a while.
-        Ok(msg) => tauri::async_runtime::spawn_blocking(move || handler::handle(&core, &msg))
-            .await
-            .unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() })),
+        Ok(msg) => answer(&app, core, msg).await,
         Err(e) => json!({ "ok": false, "error": format!("invalid request: {e}") }),
     };
     let reply = reply.to_string();
@@ -61,16 +59,45 @@ async fn handle(mut conn: UnixStream, app: AppHandle, core: Arc<Core>) -> io::Re
     conn.write_all(reply.as_bytes()).await
 }
 
-/// The native folder dialog: a browser's own file picker never reveals the absolute path.
-async fn choose_folder(app: &AppHandle, core: &Core, current: &Value) -> Value {
-    let mut dialog = app.dialog().file().set_title("Worktree folder");
-    if let Some(dir) = current.as_str().map(|dir| core.paths.expand_user(dir)).filter(|dir| dir.is_dir()) {
-        dialog = dialog.set_directory(dir);
+/// Answers one request, from the extension or the Settings window. The folder dialogs are the app's own; everything
+/// else is the core's.
+pub async fn answer(app: &AppHandle, core: Arc<Core>, msg: Value) -> Value {
+    let dialog = if msg["protocol"] == PROTOCOL { msg["action"].as_str() } else { None };
+    match dialog {
+        Some("choose_folder") => {
+            // A browser's own file picker never reveals the absolute path.
+            let current = msg["current"].as_str().map(|dir| core.paths.expand_user(dir)).filter(|dir| dir.is_dir());
+            match pick_folder(app, "Worktree folder".into(), current).await {
+                Some(path) => json!({ "ok": true, "path": path }),
+                None => json!({ "ok": false, "cancelled": true }),
+            }
+        }
+        Some("add_repo") => {
+            // A repo's folder comes only from this dialog, never from a request.
+            let expected = msg["repo"].as_str().map(str::to_owned);
+            let title = format!("Main clone of {}", expected.as_deref().unwrap_or("the repo"));
+            let Some(clone) = pick_folder(app, title, None).await else { return json!({ "ok": false, "cancelled": true }) };
+            match blocking(move || settings::add_repo(&core, &clone, expected.as_deref())).await {
+                Ok(repo) => json!({ "ok": true, "repo": repo }),
+                Err(error) => json!({ "ok": false, "error": error }),
+            }
+        }
+        _ => blocking(move || Ok(handler::handle(&core, &msg))).await.unwrap_or_else(|error| json!({ "ok": false, "error": error })),
+    }
+}
+
+/// On a blocking thread: the tools the core runs (git fetch, …) take a while.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
+}
+
+/// The system's folder dialog. None: cancelled.
+async fn pick_folder(app: &AppHandle, title: String, start: Option<PathBuf>) -> Option<PathBuf> {
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(start) = start {
+        dialog = dialog.set_directory(start);
     }
     let (chosen, choice) = tokio::sync::oneshot::channel();
     dialog.pick_folder(move |folder| drop(chosen.send(folder)));
-    match choice.await.ok().flatten().and_then(|folder| folder.into_path().ok()) {
-        Some(path) => json!({ "ok": true, "path": path }),
-        None => json!({ "ok": false, "cancelled": true }),
-    }
+    choice.await.ok().flatten().and_then(|folder| folder.into_path().ok())
 }

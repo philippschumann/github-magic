@@ -28,7 +28,8 @@ pub fn phone_serial(core: &Core, run: &Run, adb: &Path) -> Result<String, String
         words.next().is_some_and(|serial| !serial.starts_with("emulator-")) && words.next() == Some("device")
     });
     let phones: Vec<&str> = phones.collect();
-    let models = core.config.phone_models.iter().map(String::as_str).chain([""]);
+    let preferred = core.settings.get().phone_models;
+    let models = preferred.iter().map(String::as_str).chain([""]);
     let phone = models.flat_map(|model| phones.iter().filter(move |line| line.contains(model))).next();
     let mut words = phone.ok_or("no phone connected; plug one in or pair it over Wi-Fi")?.split_whitespace();
     let serial = words.next().unwrap_or_default().to_owned();
@@ -111,8 +112,7 @@ fn gradle_install(core: &Core, run: &Run, serial: &str) -> Result<(bool, String)
 
 /// The activity the launcher starts the app with. Debug builds often have a second launcher icon for LeakCanary,
 /// so the device can't name one: the first that isn't LeakCanary's is used.
-fn launcher_activity(core: &Core, run: &Run, adb: &Path, serial: &str) -> Result<String, String> {
-    let app_id = &core.config.app_id;
+fn launcher_activity(core: &Core, run: &Run, adb: &Path, serial: &str, app_id: &str) -> Result<String, String> {
     let query = ["query-activities", "--brief", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER"];
     let listed = run.capture(cmd::command(&core.paths, adb).args(["-s", serial, "shell", "cmd", "package"]).args(query).arg(app_id))?;
     // Components are the lines like "com.example.myapp/.MainActivity".
@@ -122,12 +122,11 @@ fn launcher_activity(core: &Core, run: &Run, adb: &Path, serial: &str) -> Result
     activity.map(|c| c.to_string()).ok_or_else(|| format!("{app_id} has no launcher activity on {serial}"))
 }
 
-/// Installs the worktree's debug build on the phone or the emulator with this AVD and starts it. Returns the
-/// device's serial.
-pub fn launch(core: &Core, run: &Run, avd: &str) -> Result<String, String> {
-    let app_id = &core.config.app_id;
+/// Installs the worktree's debug build on the phone or the emulator with this AVD and starts the app with this ID.
+/// Returns the device's serial.
+pub fn launch(core: &Core, run: &Run, avd: &str, app_id: &str) -> Result<String, String> {
     if app_id.is_empty() {
-        return Err("no app ID is configured".into());
+        return Err("this repo has no app ID yet; set it in Settings".into());
     }
     let sdk = sdk_dir(&run.path)?;
     let adb = sdk.join("platform-tools/adb");
@@ -145,7 +144,7 @@ pub fn launch(core: &Core, run: &Run, avd: &str) -> Result<String, String> {
             return Err(format!("installDebug failed on {serial} after the uninstall"));
         }
     }
-    let activity = launcher_activity(core, run, &adb, &serial)?;
+    let activity = launcher_activity(core, run, &adb, &serial, app_id)?;
     run.capture(cmd::command(&core.paths, &adb).args(["-s", &serial, "shell", "am", "start", "-W", "-n", &activity]))?;
     Ok(serial)
 }

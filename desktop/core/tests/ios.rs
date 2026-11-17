@@ -4,9 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{calls, paths, tmp, write};
+use common::{calls, tmp, write};
 use github_magic_core::runs::Run;
-use github_magic_core::settings::Config;
 use github_magic_core::{Core, ios};
 use serde_json::json;
 
@@ -22,8 +21,7 @@ impl Fixture {
         let tmp = tmp();
         let worktree = tmp.join("worktree");
         fs::create_dir_all(worktree.join("App.xcodeproj")).unwrap();
-        let config = Config { ios_scheme: "MyApp".into(), ..Config::default() };
-        Self { core: Arc::new(Core::new(config, paths(&tmp))), tmp, worktree }
+        Self { core: common::core(&tmp, |_| {}), tmp, worktree }
     }
 
     /// The devices `xcrun devicectl list devices` reports, as (UDID, kind, tunnel state).
@@ -38,8 +36,8 @@ impl Fixture {
     }
 
     fn launch(&self, target: &'static str, udid: &str) -> (Result<String, String>, Run) {
-        let run = Run::new(&self.core.paths.log_dir, target, 1, "feat/a", &self.worktree, "").unwrap();
-        (ios::launch(&self.core, &run, udid), run)
+        let run = Run::new(&self.core.paths.log_dir, 0, target, 1, "feat/a", &self.worktree, "").unwrap();
+        (ios::launch(&self.core, &run, udid, "MyApp"), run)
     }
 
     /// The start of every xcodebuild call, up to the device's UDID.

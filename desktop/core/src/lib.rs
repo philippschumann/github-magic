@@ -19,15 +19,15 @@ use std::sync::{Arc, Mutex};
 
 /// What the handler works with. Tests build one around temp dirs.
 pub struct Core {
-    pub config: settings::Config,
+    pub settings: settings::Store,
     pub paths: platform::Paths,
     pub runs: runs::Runs,
     repo_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
 }
 
 impl Core {
-    pub fn new(config: settings::Config, paths: platform::Paths) -> Self {
-        Self { config, paths, runs: runs::Runs::default(), repo_locks: Mutex::default() }
+    pub fn new(paths: platform::Paths) -> Self {
+        Self { settings: settings::Store::load(&paths.config_dir), paths, runs: runs::Runs::default(), repo_locks: Mutex::default() }
     }
 
     /// One lock per main clone: clicks on two PRs of a repo take turns with their git steps (worktree add, fetch,
