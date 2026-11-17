@@ -2,9 +2,11 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
-use common::{Repo, calls, head, paths, tmp};
+use common::{Repo, calls, head, paths, tmp, write};
 use github_magic_core::settings::Config;
 use github_magic_core::{Core, handler};
 use serde_json::{Value, json};
@@ -13,7 +15,7 @@ use serde_json::{Value, json};
 /// only Android IDE, Xcode and VS Code for iOS.
 struct Fixture {
     tmp: PathBuf,
-    core: Core,
+    core: Arc<Core>,
     android: Repo,
 }
 
@@ -30,7 +32,7 @@ impl Fixture {
         }
         let root = |repo: &Repo| repo.root.to_str().unwrap().to_owned();
         let repos = [("o/android".to_owned(), root(&android)), ("o/ios".to_owned(), root(&ios))].into();
-        Self { core: Core::new(Config { repos, ..Config::default() }, paths(&tmp)), tmp, android }
+        Self { core: Arc::new(Core::new(Config { repos, app_id: "com.example.myapp".into(), ..Config::default() }, paths(&tmp))), tmp, android }
     }
 
     fn act(&self, action: &str, extra: Value) -> Value {
@@ -151,4 +153,43 @@ fn two_prs_of_one_repo_at_once_take_turns_with_git() {
             path(&click.join().unwrap());
         }
     });
+}
+
+#[test]
+fn device_run_updates_then_runs_in_the_background() {
+    let f = Fixture::new();
+    let worktree = path(&f.act("open", json!({}))).to_owned();
+    let pushed = f.android.push_commit("feat/a");
+    let reply = f.act("phone", json!({}));
+    assert_eq!(path(&reply), worktree);
+    assert_eq!(head(&worktree), pushed);
+    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-phone.log")));
+    // The repo has no Android SDK, so the run fails; the button's poll reports why.
+    let status = || handler::handle(&f.core, &json!({ "action": "status", "log": reply["log"] }));
+    while status()["state"] == "running" {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(status()["state"], "failed");
+    assert!(status()["message"].as_str().unwrap().contains("local.properties"), "{}", status());
+}
+
+#[test]
+fn emulator_run_uses_the_chosen_emulator() {
+    let f = Fixture::new();
+    write(f.core.paths.avd_dir.join("Medium_Phone.ini"), "");
+    for name in [json!("-wipe-data"), json!(""), json!(null)] {
+        assert!(error(&f.act("emulator", json!({ "emulator": name }))).contains("not found"));
+    }
+    assert!(!f.tmp.join("Android-feat-a").exists()); // rejected before anything runs
+    let reply = f.act("emulator", json!({ "emulator": "Medium_Phone" }));
+    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-emulator.log")));
+    assert_eq!(f.core.runs.latest()[0].device(), "Medium_Phone");
+}
+
+#[test]
+fn status_knows_only_this_apps_runs() {
+    let f = Fixture::new();
+    for log in [json!("/etc/passwd"), json!(f.tmp.join("logs/feat-a-phone.log")), json!(null), json!(3)] {
+        assert_eq!(error(&handler::handle(&f.core, &json!({ "action": "status", "log": log }))), "unknown run");
+    }
 }

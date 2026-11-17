@@ -1,6 +1,7 @@
 //! Github Magic: a tray app the browser extension talks to through the bridge (`github-magic-bridge`).
 
 mod server;
+mod tray;
 
 use std::io;
 use std::sync::Arc;
@@ -9,28 +10,17 @@ use github_magic_core::Core;
 use github_magic_core::platform::Paths;
 use github_magic_core::settings::Config;
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // tray only, no Dock icon
             register_hosts()?;
             let paths = Paths::system();
-            server::start(Arc::new(Core::new(Config::load(&paths), paths)))?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Github Magic", true, None::<&str>)?;
-            TrayIconBuilder::new()
-                .icon(tauri::include_image!("icons/tray.png"))
-                .icon_as_template(true)
-                .menu(&Menu::with_items(app, &[&quit])?)
-                .on_menu_event(|app, event| {
-                    if event.id() == "quit" {
-                        app.exit(0);
-                    }
-                })
-                .build(app)?;
+            let core = Arc::new(Core::new(Config::load(&paths), paths));
+            server::start(core.clone())?;
+            tray::start(app.handle(), core)?;
             Ok(())
         })
         .run(tauri::generate_context!())

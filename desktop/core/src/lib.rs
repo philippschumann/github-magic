@@ -7,6 +7,7 @@ pub mod detect;
 pub mod git;
 pub mod handler;
 pub mod platform;
+pub mod runs;
 pub mod settings;
 
 use std::ffi::{CStr, OsStr};
@@ -19,12 +20,13 @@ use std::sync::{Arc, Mutex};
 pub struct Core {
     pub config: settings::Config,
     pub paths: platform::Paths,
+    pub runs: runs::Runs,
     repo_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
 }
 
 impl Core {
     pub fn new(config: settings::Config, paths: platform::Paths) -> Self {
-        Self { config, paths, repo_locks: Mutex::default() }
+        Self { config, paths, runs: runs::Runs::default(), repo_locks: Mutex::default() }
     }
 
     /// One lock per main clone: clicks on two PRs of a repo take turns with their git steps (worktree add, fetch,

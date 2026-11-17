@@ -2,6 +2,7 @@ mod common;
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use common::{fixture, paths, tmp, write};
 use github_magic_core::platform::{IDES, installed_ides};
@@ -9,10 +10,10 @@ use github_magic_core::settings::Config;
 use github_magic_core::{Core, detect, handler};
 use serde_json::json;
 
-fn core(tmp: &Path) -> Core {
+fn core(tmp: &Path) -> Arc<Core> {
     fs::create_dir_all(tmp.join("clone")).unwrap();
     let repos = [("o/r".to_owned(), tmp.join("clone").to_str().unwrap().to_owned())].into();
-    Core::new(Config { repos, ..Config::default() }, paths(tmp))
+    Arc::new(Core::new(Config { repos, ..Config::default() }, paths(tmp)))
 }
 
 #[test]
