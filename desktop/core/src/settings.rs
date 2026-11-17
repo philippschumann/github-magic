@@ -1,6 +1,7 @@
 //! The user's repos and app.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -46,4 +47,13 @@ impl Config {
             phone_models: config["PHONE_MODELS"].as_array().map(|m| m.iter().filter_map(strings).collect()).unwrap_or_default(),
         }
     }
+}
+
+/// The folder new worktrees go in, as sent by the extension. None: next to the main clone.
+pub fn worktree_dir(paths: &Paths, value: &Value) -> Result<Option<PathBuf>, String> {
+    if value.is_null() || value == "" {
+        return Ok(None);
+    }
+    let dir = value.as_str().map(|dir| paths.expand_user(dir)).filter(|dir| dir.is_absolute() && dir.is_dir());
+    dir.map(Some).ok_or_else(|| format!("worktree folder {value} does not exist; change it in the extension's settings"))
 }

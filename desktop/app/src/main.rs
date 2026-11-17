@@ -19,7 +19,7 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // tray only, no Dock icon
             register_hosts()?;
             let paths = Paths::system();
-            server::start(Arc::new(Core { config: Config::load(&paths), paths }))?;
+            server::start(Arc::new(Core::new(Config::load(&paths), paths)))?;
             let quit = MenuItem::with_id(app, "quit", "Quit Github Magic", true, None::<&str>)?;
             TrayIconBuilder::new()
                 .icon(tauri::include_image!("icons/tray.png"))

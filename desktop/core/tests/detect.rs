@@ -12,7 +12,7 @@ use serde_json::json;
 fn core(tmp: &Path) -> Core {
     fs::create_dir_all(tmp.join("clone")).unwrap();
     let repos = [("o/r".to_owned(), tmp.join("clone").to_str().unwrap().to_owned())].into();
-    Core { config: Config { repos, ..Config::default() }, paths: paths(tmp) }
+    Core::new(Config { repos, ..Config::default() }, paths(tmp))
 }
 
 #[test]

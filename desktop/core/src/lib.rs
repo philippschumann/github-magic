@@ -3,18 +3,34 @@
 pub mod android;
 pub mod cmd;
 pub mod detect;
+pub mod git;
 pub mod handler;
 pub mod platform;
 pub mod settings;
 
 use std::ffi::{CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// What the handler works with. Tests build one around temp dirs.
 pub struct Core {
     pub config: settings::Config,
     pub paths: platform::Paths,
+    repo_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+}
+
+impl Core {
+    pub fn new(config: settings::Config, paths: platform::Paths) -> Self {
+        Self { config, paths, repo_locks: Mutex::default() }
+    }
+
+    /// One lock per main clone: clicks on two PRs of a repo take turns with their git steps (worktree add, fetch,
+    /// switch, merge), which would otherwise collide on git's lock files.
+    pub fn repo_lock(&self, root: &Path) -> Arc<Mutex<()>> {
+        self.repo_locks.lock().unwrap().entry(root.to_owned()).or_default().clone()
+    }
 }
 
 /// Native messaging caps host replies at 1 MB; requests are tiny. Both sides refuse bigger frames.
