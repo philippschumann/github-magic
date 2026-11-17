@@ -1,0 +1,149 @@
+# Publishing a release builds everything for it: the signed Firefox build, the Chrome Web Store upload, the macOS app
+# with its updater files, and the Homebrew cask.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  # AMO signs each version only once and the app's updater compares versions, so a tag that doesn't match the
+  # versions in the repo would waste a release.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag matches manifest.json and desktop/Cargo.toml
+        id: check
+        run: |
+          version=$(jq -r .version manifest.json)
+          app=$(sed -n 's/^version = "\(.*\)".*/\1/p' desktop/Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ] || [ "$app" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME, manifest.json version $version and desktop/Cargo.toml version $app don't match"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Signed on addons.mozilla.org (unlisted, see web-ext-config.mjs) and attached as github-magic-<version>.xpi.
+  firefox:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Sign
+        run: npx --yes web-ext@10.8.0 sign
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      - name: Attach to the release
+        run: |
+          mv web-ext-artifacts/*.xpi "github-magic-$VERSION.xpi"
+          gh release upload "$GITHUB_REF_NAME" "github-magic-$VERSION.xpi"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Uploaded to the Chrome Web Store and published with the listing's visibility (unlisted). Skipped until the
+  # listing exists and its CWS_* secrets are set.
+  chrome:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+      PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+      CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+      REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      # The Web Store gives the extension its own ID, so its build has no "key".
+      - name: Pack without key
+        run: |
+          mkdir pack
+          cp -R background.js content.js settings pack/
+          jq 'del(.key)' manifest.json > pack/manifest.json
+      - name: Upload and publish
+        if: env.EXTENSION_ID != ''
+        run: npx --yes chrome-webstore-upload-cli@4.0.2 --source pack
+
+  # The universal app as a .dmg, plus what the app's updater downloads: the app archive, its signature and
+  # latest.json.
+  macos:
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - run: npm install --global @tauri-apps/cli@2.12.5
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop/app
+          tauriScript: tauri
+          args: --target universal-apple-darwin
+          releaseId: ${{ github.event.release.id }}
+
+  # Points the cask in philippschumann/homebrew-tap at this release's .dmg. Skipped until the tap's deploy key is set.
+  homebrew:
+    needs: [version, macos]
+    runs-on: ubuntu-latest
+    env:
+      TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Write the cask
+        if: env.TAP_KEY != ''
+        run: |
+          dmg=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name | select(endswith(".dmg"))')
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p "$dmg"
+          sha256=$(sha256sum "$dmg" | cut -d' ' -f1)
+          file=$(printf '%s' "$dmg" | sed "s/$VERSION/#{version}/")
+          install -m 600 /dev/null key
+          printf '%s\n' "$TAP_KEY" > key
+          export GIT_SSH_COMMAND="ssh -i $PWD/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone -q git@github.com:philippschumann/homebrew-tap.git tap
+          mkdir -p tap/Casks
+          cat > tap/Casks/github-magic.rb <<EOF
+          cask "github-magic" do
+            version "$VERSION"
+            sha256 "$sha256"
+
+            url "https://github.com/$GITHUB_REPOSITORY/releases/download/v#{version}/$file"
+            name "Github Magic"
+            desc "Opens GitHub pull requests in your IDE or on a device"
+            homepage "https://github.com/$GITHUB_REPOSITORY"
+
+            auto_updates true
+
+            app "Github Magic.app"
+
+            uninstall quit:   "com.philippschumann.github-magic",
+                      delete: [
+                        "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/github_magic.json",
+                        "~/Library/Application Support/Mozilla/NativeMessagingHosts/github_magic.json",
+                      ]
+
+            zap trash: [
+              "~/Library/Application Support/com.philippschumann.github-magic",
+              "~/Library/Logs/com.philippschumann.github-magic",
+            ]
+          end
+          EOF
+          cd tap
+          git add Casks/github-magic.rb
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "github-magic $VERSION" || exit 0 # a rerun: nothing changed
+          git push -q

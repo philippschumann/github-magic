@@ -94,7 +94,29 @@ The app is a [Tauri](https://v2.tauri.app) app in [desktop/](desktop): `core` ho
 
 ## Releases
 
-Publishing a GitHub release signs the Firefox build and attaches it as `github-magic-<version>.xpi` ([sign-firefox.yml](.github/workflows/sign-firefox.yml)). The tag must be `v` plus the `version` in `manifest.json`, and the repo needs your AMO JWT issuer and secret as the `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` secrets.
+The app and the extension share one version. To release, set the same `version` in `manifest.json` and `desktop/Cargo.toml`, merge that, and publish a GitHub release tagged `v<version>`. [release.yml](.github/workflows/release.yml) then:
+
+- **Firefox:** signs the extension on addons.mozilla.org (unlisted) and attaches it as `github-magic-<version>.xpi`.
+- **Chrome:** uploads the extension, without `key`, to the Chrome Web Store and publishes it with the listing's visibility, which is set to unlisted in the Web Store dashboard. This step is skipped until the listing exists.
+- **macOS:** builds the universal app and attaches the `.dmg`, plus the files the app's updater reads: the app archive, its signature and `latest.json`.
+- **Homebrew:** points the cask in [philippschumann/homebrew-tap](https://github.com/philippschumann/homebrew-tap) at the new `.dmg`. This step is skipped until the tap's deploy key is set.
+
+Installed apps look for a newer release when they start and once a day, offer it as "Update to x.y.z" in the menu bar menu, and install it only when that is clicked.
+
+The repo needs these secrets:
+
+| Secret | For |
+|---|---|
+| `AMO_JWT_ISSUER`, `AMO_JWT_SECRET` | Firefox signing: your addons.mozilla.org API key |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Signing the updater's app archive. The public half is `plugins.updater.pubkey` in [tauri.conf.json](desktop/app/tauri.conf.json). Keep the key safe: without it, installed apps can't be updated |
+| `HOMEBREW_TAP_DEPLOY_KEY` | The private half of a deploy key with write access on the tap repo |
+| `CWS_EXTENSION_ID`, `CWS_PUBLISHER_ID`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN` | The Chrome Web Store upload, see [chrome-webstore-upload-keys](https://github.com/fregante/chrome-webstore-upload-keys) |
+
+To build the app locally as the release does, with the updater key at hand:
+
+```bash
+cd desktop/app && TAURI_SIGNING_PRIVATE_KEY=~/.tauri/github-magic.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/github-magic.key.password)" cargo tauri build
+```
 
 ## Quick filters
 

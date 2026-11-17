@@ -294,12 +294,12 @@ The extension stays at the repo root, and `settings/` belongs to both the extens
   1. Firefox: sign with `web-ext` and attach the `.xpi`, as today.
   2. Chrome: zip the extension without `key` and upload it to the Chrome Web Store with a pinned `chrome-webstore-upload-cli`.
   3. macOS: `tauri-action` builds `universal-apple-darwin`. It produces the `.dmg`, the updater archive and its signature, and `latest.json`, and attaches them to the release.
-  4. Homebrew: update `version` and `sha256` in `philippschumann/homebrew-tap/Casks/github-magic.rb` and push.
+  4. Homebrew: write `philippschumann/homebrew-tap/Casks/github-magic.rb` with the new `version` and `sha256` and push.
 - **Secrets:**
   - Firefox: `AMO_JWT_ISSUER`, `AMO_JWT_SECRET` (existing)
   - Tauri updater: `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-  - Homebrew: `HOMEBREW_TAP_TOKEN` (contents write on the tap repo only)
-  - Chrome Web Store: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_EXTENSION_ID`
+  - Homebrew: `HOMEBREW_TAP_DEPLOY_KEY` (a deploy key with write access on the tap repo only)
+  - Chrome Web Store: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_EXTENSION_ID`, `CWS_PUBLISHER_ID`
 - **Cask:**
 
   ```ruby
@@ -399,9 +399,9 @@ Everything that differs between systems sits in `core::platform`, so adding one 
 ## Risks to check
 
 1. **Chrome Web Store and `key`:** the Web Store may reject a manifest that contains `key`. The release job strips it either way. Check at the first upload.
-2. **Notification button:** `tauri-plugin-notification` may not support action buttons on macOS. If not, use `mac-notification-sys` directly in the macOS platform module. Failing that, notify without the button, since Show log is in the tray anyway. Check in phase 2.
-3. **Updating an unsigned app:** confirm that an update installed by Tauri's updater on an ad-hoc-signed app starts without a new Gatekeeper prompt. Check in phase 5.
+2. **Notification button:** `tauri-plugin-notification` has no action buttons on macOS, so the app uses `mac-notification-sys` directly. Still to check by eye: that the notification appears with its Show log button. If it doesn't, notify without the button, since Show log is in the tray anyway.
+3. **Updating an unsigned app:** confirm that an update installed by Tauri's updater on an ad-hoc-signed app starts without a new Gatekeeper prompt. A locally built 0.2.0 updated itself to 0.2.1 from a local `latest.json` and restarted, but a local build is never quarantined: check again with the first two real releases.
 4. **Folder access after updates:** each update changes the ad-hoc signature, so macOS asks again for access to worktrees in Documents, Desktop or Downloads. This is accepted; other folders aren't affected.
 5. **Live menu text:** check that tray menu text updates while the menu is open on macOS. If it doesn't, show the start time instead of the elapsed time.
-6. **Shared settings folder:** check that `tauri build` bundles `frontendDist` from outside `desktop/app`, and that `cargo tauri dev` serves it without a dev server. If not, a build step copies `settings/` into the app. Check in phase 3.
+6. **Shared settings folder:** checked: `tauri build` bundles `frontendDist` from outside `desktop/app`, and `cargo tauri dev` serves it without a dev server.
 7. **Linux tray:** GNOME shows tray icons only with the AppIndicator extension. This matters only once Linux is added.
