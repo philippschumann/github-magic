@@ -58,7 +58,7 @@ You can change all of these later in the extension's settings (click the extensi
 - **Run on phone / emulator:** builds and installs `:app:installDebug`, then starts the app. Phones listed in `PHONE_MODELS` come first, in that order, then any other phone. The emulator is the one you chose, booted if it isn't running. The button says "Installing…" until the app has started, and a macOS notification reports the result.
   - A new run cancels the one still going on that device, whatever PR it was for.
   - If the device refuses the build as a downgrade or because of a different signing key, the app is uninstalled and installed again, which wipes its data.
-  - Logs: `~/Library/Logs/github-pr-quick-filters/`.
+  - Logs: `~/Library/Logs/github-magic/`.
 - **Run on iPhone / simulator:** builds the Debug configuration of the `IOS_SCHEME` scheme with `xcodebuild`, installs it and starts it. It uses Xcode's default DerivedData, so it shares the build cache with Xcode builds of the same worktree.
   - iPhone: the first paired iPhone within reach, connected ones first. The build passes `-allowProvisioningUpdates`, so automatic signing can register the iPhone and fetch a profile.
   - Simulator: the one you chose, booted if it isn't running, with the Simulator app brought to the front.

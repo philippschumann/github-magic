@@ -3,10 +3,10 @@
 # Re-run after moving this folder: the manifests store the script's absolute path.
 set -euo pipefail
 
-NAME=github_pr_quick_filters
+NAME=github_magic
 HOST="$(cd "$(dirname "$0")" && pwd)/open_pr_in_studio.py"
 CHROME_ID=nbiobejjfpehmbkkbddjhplmdeobhcjb # fixed by "key" in manifest.json
-FIREFOX_ID=pr-quick-filters@local          # browser_specific_settings.gecko.id in manifest.json
+FIREFOX_ID=github-magic@philippschumann # browser_specific_settings.gecko.id in manifest.json
 
 chmod +x "$HOST"
 

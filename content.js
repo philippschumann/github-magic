@@ -14,7 +14,7 @@ const FILTERS = [
   { label: "Merged", q: "is:pr is:merged" },
 ];
 
-const BAR_ID = "pr-quick-filters";
+const BAR_ID = "github-magic-filters";
 // Search box container on /owner/repo/pulls; the page is a React SPA, so we re-check on DOM changes.
 const ANCHOR = "#repo-pulls-dashboard-filter";
 

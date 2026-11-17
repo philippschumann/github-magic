@@ -48,7 +48,7 @@ ACTIONS = ("open", "claude", *RUN_TARGETS)
 
 AVD_DIR = os.path.expanduser("~/.android/avd")  # each emulator has a <name>.ini here
 BOOT_TIMEOUT = 300
-LOG_DIR = os.path.expanduser("~/Library/Logs/github-pr-quick-filters")
+LOG_DIR = os.path.expanduser("~/Library/Logs/github-magic")
 SESSIONS_DIR = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions")
 
 # Browsers start the host with a minimal PATH and no JAVA_HOME; keep Homebrew's tools (git, anything the build

@@ -3,7 +3,7 @@ const SETTINGS = ["worktreeDir", "ide", "iosIde", "emulator", "simulator"];
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   chrome.storage.local.get(SETTINGS, (stored) => {
     const request = { ...msg, ...Object.fromEntries(SETTINGS.map((key) => [key, stored?.[key] || ""])) };
-    chrome.runtime.sendNativeMessage("github_pr_quick_filters", request, (res) => {
+    chrome.runtime.sendNativeMessage("github_magic", request, (res) => {
       sendResponse(chrome.runtime.lastError ? { ok: false, error: chrome.runtime.lastError.message } : res);
     });
   });

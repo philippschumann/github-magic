@@ -17,7 +17,7 @@ function save() {
 chrome.storage.local.get("worktreeDir", (stored) => { input.value = stored?.worktreeDir || ""; });
 input.addEventListener("change", save);
 
-chrome.runtime.sendNativeMessage("github_pr_quick_filters", { action: "detect" }, (res) => {
+chrome.runtime.sendNativeMessage("github_magic", { action: "detect" }, (res) => {
   if (chrome.runtime.lastError) return show(chrome.runtime.lastError.message, true);
   if (!res?.ok) return show(res?.error ?? "No response from the native host", true);
   chrome.storage.local.get(Object.keys(PICKS), (stored) => {
@@ -34,7 +34,7 @@ for (const key of Object.keys(PICKS)) {
 // The browser's own pickers never reveal an absolute path, so the native host shows the macOS folder dialog.
 browse.addEventListener("click", () => {
   browse.disabled = true;
-  chrome.runtime.sendNativeMessage("github_pr_quick_filters", { action: "choose_folder", current: input.value.trim() }, (res) => {
+  chrome.runtime.sendNativeMessage("github_magic", { action: "choose_folder", current: input.value.trim() }, (res) => {
     browse.disabled = false;
     if (chrome.runtime.lastError) return show(chrome.runtime.lastError.message, true);
     if (res?.cancelled) return;
