@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The Settings window: the only one that may call the settings command and hear of changes.",
+  "windows": ["settings"],
+  "permissions": ["allow-settings", "core:event:allow-listen", "core:event:allow-unlisten"]
+}

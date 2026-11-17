@@ -1,4 +1,5 @@
-//! The tray menu (one line per target that has had a run, then Quit) and the notification when a run ends.
+//! The tray menu (one line per target that has had a run, then Settings… and Quit) and the notification when a run
+//! ends.
 
 use std::process::Command;
 use std::sync::Arc;
@@ -20,12 +21,10 @@ type Lines = Vec<(Arc<Run>, Submenu<Wry>)>;
 pub fn start(app: &AppHandle, core: Arc<Core>) -> tauri::Result<()> {
     // Notifications then carry this app's name and icon. An unbundled development build has neither.
     let _ = mac_notification_sys::set_application(&app.config().identifier);
-    let clicks = core.clone();
     TrayIconBuilder::with_id(TRAY)
         .icon(tauri::include_image!("icons/tray.png"))
         .icon_as_template(true)
         .menu(&menu(app, &core)?.0)
-        .on_menu_event(move |app, event| on_click(app, &clicks, event.id().as_ref()))
         .build(app)?;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -75,6 +74,7 @@ fn menu(app: &AppHandle, core: &Core) -> tauri::Result<(Menu<Wry>, Lines)> {
     if !lines.is_empty() {
         menu.append(&PredefinedMenuItem::separator(app)?)?;
     }
+    menu.append(&MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit Github Magic", true, None::<&str>)?)?;
     Ok((menu, lines))
 }
@@ -106,11 +106,13 @@ fn clock(time: SystemTime) -> String {
     format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
-fn on_click(app: &AppHandle, core: &Arc<Core>, id: &str) {
+/// A click in the tray menu or the menu bar.
+pub fn on_click(app: &AppHandle, core: &Arc<Core>, id: &str) {
     let run = |target: &str| core.runs.latest().into_iter().find(|run| run.target == target);
     match id.split_once(':') {
         Some(("cancel", target)) => drop(run(target).map(|run| run.cancel())),
         Some(("log", target)) => drop(run(target).map(|run| show_log(&run))),
+        _ if id == "settings" => crate::show_settings(app),
         _ if id == "quit" => quit(app, core),
         _ => {}
     }

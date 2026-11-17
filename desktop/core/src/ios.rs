@@ -31,10 +31,9 @@ fn iphone_udid(core: &Core, run: &Run) -> Result<String, String> {
 
 /// Builds the scheme for the iPhone or the simulator with this UDID, installs it there and starts it. Returns the
 /// device's UDID.
-pub fn launch(core: &Core, run: &Run, udid: &str) -> Result<String, String> {
-    let scheme = &core.config.ios_scheme;
+pub fn launch(core: &Core, run: &Run, udid: &str, scheme: &str) -> Result<String, String> {
     if scheme.is_empty() {
-        return Err("no iOS scheme is configured".into());
+        return Err("this repo has no scheme yet; set it in Settings".into());
     }
     let xcrun = |args: &[&str]| run.capture(cmd::command(&core.paths, "xcrun").args(args));
     let udid = if run.target == "simulator" {

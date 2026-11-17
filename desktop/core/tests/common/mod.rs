@@ -7,7 +7,12 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+
+use std::sync::Arc;
+
+use github_magic_core::Core;
 use github_magic_core::platform::Paths;
+use github_magic_core::settings::Settings;
 
 /// A fresh temp dir, resolved like the paths the core returns.
 pub fn tmp() -> PathBuf {
@@ -37,8 +42,16 @@ pub fn paths(tmp: &Path) -> Paths {
         avd_dir: tmp.join("avd"),
         sessions_dir: tmp.join("sessions"),
         log_dir: tmp.join("logs"),
+        config_dir: tmp.join("config"),
         path: format!("{}:/usr/bin:/bin", bin.display()).into(),
     }
+}
+
+/// A core inside `tmp` with these settings.
+pub fn core(tmp: &Path, settings: impl FnOnce(&mut Settings)) -> Arc<Core> {
+    let core = Arc::new(Core::new(paths(tmp)));
+    core.settings.update(settings).unwrap();
+    core
 }
 
 /// The calls a stand-in tool in `dir` logged.

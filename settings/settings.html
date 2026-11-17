@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Github Magic settings</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <p id="missing" hidden>These settings live in the Github Magic app, which isn't installed.
+    <a href="https://github.com/philippschumann/github-magic#install" target="_blank" rel="noreferrer">Install Github Magic</a></p>
+
+  <fieldset id="fields" disabled>
+    <h2>Repos</h2>
+    <ul id="repos"></ul>
+    <button id="add" type="button">Add…</button>
+    <p class="hint">The buttons work on these GitHub repos. Add… asks for the repo's main clone on this Mac and reads the repo from its origin. Run on phone and emulator need the Android app ID, Run on iPhone and simulator the Xcode scheme.</p>
+
+    <label for="worktreeDir">Worktree folder</label>
+    <div class="row">
+      <input id="worktreeDir" type="text" placeholder="Not set" spellcheck="false" autocomplete="off">
+      <button id="browse" type="button">Choose…</button>
+    </div>
+    <p class="hint">New PR worktrees are created here as &lt;repo&gt;-&lt;branch&gt;. Until it is set, the IDE button only offers "Set up".</p>
+
+    <label for="ide">Android IDE</label>
+    <select id="ide"></select>
+    <p class="hint">"Open in" uses this IDE for Android repos. Only installed IDEs are listed. Until one is chosen, the IDE button asks.</p>
+
+    <label for="iosIde">iOS IDE</label>
+    <select id="iosIde"></select>
+    <p class="hint">"Open in" uses this IDE for iOS repos. Only installed ones are listed. Until one is chosen, the IDE button asks.</p>
+
+    <label for="emulator">Emulator</label>
+    <select id="emulator"></select>
+    <p class="hint">"Run on emulator" uses this emulator and boots it if it isn't running. Until one is chosen, it asks.</p>
+
+    <label for="simulator">Simulator</label>
+    <select id="simulator"></select>
+    <p class="hint">"Run on simulator" uses this iOS simulator and boots it if it isn't running. Until one is chosen, it asks.</p>
+
+    <label for="phoneModels">Phone order</label>
+    <textarea id="phoneModels" rows="3" placeholder="model:Pixel_10" spellcheck="false" autocomplete="off"></textarea>
+    <p class="hint">"Run on phone" prefers the connected phones in this order, then any other. One per line, as <code>adb devices -l</code> shows them, for example <code>model:Pixel_10</code>.</p>
+
+    <label class="check"><input id="openAtLogin" type="checkbox"> Open Github Magic at login</label>
+  </fieldset>
+
+  <p id="status" role="status"></p>
+  <script src="transport.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

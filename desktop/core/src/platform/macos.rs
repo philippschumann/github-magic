@@ -22,6 +22,8 @@ pub struct Paths {
     pub avd_dir: PathBuf,
     pub sessions_dir: PathBuf,
     pub log_dir: PathBuf,
+    /// settings.json lives here.
+    pub config_dir: PathBuf,
     /// PATH of every command the core starts.
     pub path: OsString,
 }
@@ -38,6 +40,7 @@ impl Paths {
             avd_dir: home.join(".android/avd"),
             sessions_dir: home.join("Library/Application Support/Claude/claude-code-sessions"),
             log_dir: home.join("Library/Logs/com.philippschumann.github-magic"),
+            config_dir: home.join("Library/Application Support/com.philippschumann.github-magic"),
             path,
             home,
         }

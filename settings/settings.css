@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; }
+body { font: 13px/1.5 system-ui, sans-serif; margin: 16px auto; padding: 0 16px; max-width: 640px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+h2, label { display: block; font-size: inherit; font-weight: 600; margin: 0 0 4px; }
+.row { display: flex; gap: 8px; align-items: center; }
+input[type=text], textarea { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; }
+textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; }
+select, button { padding: 5px 12px; font: inherit; }
+.hint { margin: 6px 0 16px; opacity: .75; }
+.check { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+#repos { list-style: none; margin: 0 0 8px; padding: 0; }
+#repos li { padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+#repos .path { opacity: .75; overflow-wrap: anywhere; }
+#repos .row { margin-top: 4px; }
+#repos label { font-weight: normal; margin: 0; }
+#missing { padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, #cf222e 12%, transparent); }
+#status { min-height: 1.5em; margin: 8px 0 0; position: sticky; bottom: 0; background: Canvas; }
+#status.error { color: #cf222e; }

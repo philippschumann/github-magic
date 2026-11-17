@@ -69,7 +69,7 @@ The Tauri app. It runs without a Dock icon (`LSUIElement`) and shows only the tr
 - **Socket server:** a tokio `UnixListener` at `<per-user temp dir>/github-magic.sock`, created with mode `0600`. The per-user temp dir comes from `confstr(_CS_DARWIN_USER_TEMP_DIR)` and is private to the user. A Unix socket path can be at most 104 bytes, and `~/Library/Application Support/<bundle id>/…` can go over that. A stale socket file is removed before `bind`. Each connection is handled in its own task, so a slow `git fetch` never blocks status polls.
 - **Single instance:** `tauri-plugin-single-instance`. A second launch opens the settings window.
 - **Settings changes:** every write goes through `core::settings`, which broadcasts the change. The app's settings window re-renders on it.
-- **Start at login:** `tauri-plugin-autostart`, switched on by default and toggled in Settings.
+- **Start at login:** `tauri-plugin-autostart`, switched on by default and toggled in Settings. Development builds never register a login item.
 - **Native messaging registration:** the app writes the browsers' host manifests at every start, so they always point at the running app's bridge (see below). This replaces `install.sh`.
 - **Quitting:** if a run is going, the app asks "1 run in progress. Quit and cancel it?" and cancels it on yes. Emulators and simulators keep running. The same check runs before an update restarts the app.
 
@@ -141,13 +141,13 @@ When a run finishes there's one notification: "Started on Pixel 10" or "Failed: 
 One plain HTML/JS page, styled like today's `options.html`, serves both places:
 
 - **Where it lives:** `settings/` at the repo root, so it is part of the extension. The extension uses it as its options page (`options_ui.page: "settings/settings.html"`, `open_in_tab: true`, since the repo list needs more room than the embedded panel). The app loads the same folder as its Settings window (`build.frontendDist: "../../settings"`, `app.withGlobalTauri: true`, so plain JS reaches `invoke` without a bundler).
-- **Transport:** `settings/transport.js` is the only part that differs. Its `call(msg)` uses `window.__TAURI__.core.invoke("settings", { msg })` in the app and `chrome.runtime.sendNativeMessage("github_magic", { ...msg, protocol })` in the extension. Both reach the same core handler, so both windows use the same actions (`settings`, `set`, `choose_folder`, `add_repo`, `remove_repo`, see Protocol) and the same validation.
+- **Transport:** `settings/transport.js` is the only part that differs. Its `call(msg)` uses `window.__TAURI__.core.invoke("settings", { msg })` in the app and `chrome.runtime.sendMessage(msg)` in the extension, where `background.js` relays it to the app like the PR buttons' requests, so the protocol version lives in one place. Both reach the same core handler, so both windows use the same actions (`settings`, `set`, `choose_folder`, `add_repo`, `remove_repo`, see Protocol) and the same validation.
 - **Saving:** every change saves at once with one `set` per field, as today's options page does. Two windows open at once never overwrite each other's other fields.
 - **Staying current:**
   - The app window re-renders on the core's change broadcast.
   - The extension page reads `settings` again whenever it becomes visible (`visibilitychange`).
   - The PR buttons already read settings fresh through `detect` on every click.
-- **App missing:** the extension page disables its fields and shows "Install Github Magic", linking to the README's install section, when native messaging reports the host missing. When the app is installed, the bridge starts it, so the page only shows the bridge's "Github Magic isn't running" error if the app fails to start.
+- **App missing:** the extension page disables its fields and shows "Install Github Magic", linking to the README's install section, when native messaging reports the host missing (`background.js` marks such a reply with `missing: true`). When the app is installed, the bridge starts it, so the page only shows the bridge's "Github Magic isn't running" error if the app fails to start.
 - **No inline scripts and no remote content:** this fits both the extension's MV3 CSP and the app window's `default-src 'self'`. In the app only the Settings window may call the `settings` command (Tauri capabilities).
 
 The page shows:
@@ -195,13 +195,13 @@ All in phase 3:
 | Action | Request fields | Reply |
 |---|---|---|
 | `detect` | `repo` | `platform`, `repoConfigured`, `ides`, `iosIdes`, `avds`, `simulators` (`[{id, label}]`), `adb`, `settings` (`worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`) |
-| `settings` | none | the whole of `settings.json`, plus the choices: `ides`, `iosIdes`, `avds`, `simulators`, `adb` |
+| `settings` | none | `settings` (the whole of `settings.json`), `platforms` (each repo's detected platform), and the choices: `ides`, `iosIdes`, `avds`, `simulators` |
 | `set` | `key`, `value`, and `repo` for `appId` and `scheme` | `{ok}`, or `{ok: false, error}` naming what's wrong |
 | `choose_folder` | `current` | `{ok, path}` or `{ok: false, cancelled: true}` |
 | `add_repo` | `repo` from a PR page; none from the settings page, which takes `owner/name` from the chosen clone's `origin` | `{ok, repo}`, cancelled, or an error if the chosen clone's `origin` isn't `repo` |
 | `remove_repo` | `repo` | `{ok}` |
 
-`set` takes these keys: `worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`, `phoneModels`, `openAtLogin`, and per repo `appId` (Android) or `scheme` (iOS). A repo's folder is set only through `add_repo`'s native folder picker, never from a request field.
+`set` takes these keys: `worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`, `phoneModels`, `openAtLogin`, and per repo `appId` (Android) or `scheme` (iOS). An empty `worktreeDir`, `ide`, `iosIde`, `emulator` or `simulator` unsets it. A repo's folder is set only through `add_repo`'s native folder picker, never from a request field.
 | `open`, `claude` | `repo`, `pr`, `branch`, `title` | `{ok, path}` |
 | `phone`, `emulator`, `iphone`, `simulator` | `repo`, `pr`, `branch`, `title` | `{ok, path, run}` |
 | `status` | `run` | `{ok, state, message?, log}` |

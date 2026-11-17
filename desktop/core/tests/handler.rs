@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use common::{Repo, calls, head, paths, tmp, write};
-use github_magic_core::settings::Config;
+use common::{Repo, calls, head, tmp, write};
+use github_magic_core::settings::Settings;
 use github_magic_core::{Core, handler};
 use serde_json::{Value, json};
 
 /// An Android repo (`o/android`) and an iOS repo (`o/ios`) with a PR branch `feat/a` each, IntelliJ IDEA as the
-/// only Android IDE, Xcode and VS Code for iOS.
+/// only Android IDE and the chosen one, Xcode and VS Code for iOS.
 struct Fixture {
     tmp: PathBuf,
     core: Arc<Core>,
@@ -30,15 +30,33 @@ impl Fixture {
         for app in ["IntelliJ IDEA CE.app", "Xcode.app", "Visual Studio Code.app"] {
             fs::create_dir_all(tmp.join("Applications").join(app)).unwrap();
         }
-        let root = |repo: &Repo| repo.root.to_str().unwrap().to_owned();
-        let repos = [("o/android".to_owned(), root(&android)), ("o/ios".to_owned(), root(&ios))].into();
-        Self { core: Arc::new(Core::new(Config { repos, app_id: "com.example.myapp".into(), ios_scheme: "MyApp".into(), ..Config::default() }, paths(&tmp))), tmp, android }
+        let core = common::core(&tmp, |s| {
+            let android_repo = s.repos.entry("o/android".into()).or_default();
+            android_repo.path = android.root.to_str().unwrap().into();
+            android_repo.app_id = "com.example.myapp".into();
+            let ios_repo = s.repos.entry("o/ios".into()).or_default();
+            ios_repo.path = ios.root.to_str().unwrap().into();
+            ios_repo.scheme = "MyApp".into();
+            s.ide = "IntelliJ IDEA".into();
+        });
+        Self { core, tmp, android }
     }
 
+    fn set(&self, change: impl FnOnce(&mut Settings)) {
+        self.core.settings.update(change).unwrap();
+    }
+
+    fn send(&self, msg: Value) -> Value {
+        let mut request = json!({ "protocol": 1 });
+        request.as_object_mut().unwrap().extend(msg.as_object().unwrap().clone());
+        handler::handle(&self.core, &request)
+    }
+
+    /// A click on a button of PR #1 (branch `feat/a`) of the Android repo, unless `extra` says otherwise.
     fn act(&self, action: &str, extra: Value) -> Value {
-        let mut msg = json!({ "repo": "o/android", "pr": 1, "action": action, "branch": "feat/a", "ide": "IntelliJ IDEA" });
+        let mut msg = json!({ "repo": "o/android", "pr": 1, "action": action, "branch": "feat/a" });
         msg.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-        handler::handle(&self.core, &msg)
+        self.send(msg)
     }
 
     /// What the stand-in `open` was called with.
@@ -65,24 +83,44 @@ fn path(reply: &Value) -> &Path {
 fn rejects_bad_input() {
     let f = Fixture::new();
     for (bad, message) in [
-        (json!({ "repo": "evil/repo" }), "not configured"),
+        (json!({ "repo": "evil/repo" }), "evil/repo isn't added yet"),
+        (json!({ "repo": null }), "isn't added yet"),
         (json!({ "pr": "1; rm -rf /" }), "invalid PR"),
         (json!({ "pr": true }), "invalid PR"),
         (json!({ "pr": -3 }), "invalid PR"),
         (json!({ "action": "rm" }), "unknown action"),
+        (json!({ "action": "add_repo" }), "unknown action"), // only the app itself adds repos, through its folder picker
+        (json!({ "action": null }), "unknown action"),
         (json!({ "branch": "--upload-pack=x" }), "can't check out"),
         (json!({ "branch": "../../x" }), "can't check out"),
         (json!({ "branch": "someone:feat/a" }), "forks"),
         (json!({ "branch": null }), "can't check out"),
-        (json!({ "worktreeDir": "/does/not/exist" }), "does not exist"),
-        (json!({ "worktreeDir": "relative/dir" }), "does not exist"),
-        (json!({ "ide": "Notepad" }), "not installed"),
-        (json!({ "ide": "/Applications/Calculator.app" }), "not installed"),
     ] {
         let reply = f.act("open", bad.clone());
         assert!(error(&reply).contains(message), "{bad}: {reply}");
     }
     assert_eq!(f.opened(), [] as [&str; 0]);
+}
+
+#[test]
+fn settings_that_no_longer_hold_are_rejected() {
+    let f = Fixture::new();
+    f.set(|s| s.ide = "Android Studio".into()); // uninstalled since it was chosen
+    assert!(error(&f.act("open", json!({}))).contains("not installed"));
+    f.set(|s| s.worktree_dir = f.tmp.join("deleted").to_str().unwrap().into());
+    assert!(error(&f.act("claude", json!({}))).contains("does not exist"));
+    assert_eq!(f.opened(), [] as [&str; 0]);
+}
+
+#[test]
+fn requests_of_another_protocol_are_told_which_side_to_update() {
+    let f = Fixture::new();
+    let detect = |protocol: Value| handler::handle(&f.core, &json!({ "action": "detect", "protocol": protocol }));
+    assert_eq!(detect(json!(1))["ok"], true);
+    for (protocol, older) in [(json!(null), "extension"), (json!(0), "extension"), (json!("1"), "extension"), (json!(2), "app")] {
+        let reply = detect(protocol);
+        assert_eq!(reply, json!({ "ok": false, "title": "Update needed", "error": format!("Update the Github Magic {older}") }));
+    }
 }
 
 #[test]
@@ -103,31 +141,33 @@ fn worktrees_go_into_the_chosen_folder() {
     let f = Fixture::new();
     let dir = f.tmp.join("worktrees");
     fs::create_dir_all(&dir).unwrap();
-    assert_eq!(path(&f.act("open", json!({ "worktreeDir": dir }))), dir.join("Android-feat-a"));
+    f.set(|s| s.worktree_dir = dir.to_str().unwrap().into());
+    assert_eq!(path(&f.act("open", json!({}))), dir.join("Android-feat-a"));
 }
 
 #[test]
 fn ios_repo_opens_in_the_chosen_ios_ide_xcode_with_its_project() {
     let f = Fixture::new();
-    let reply = f.act("open", json!({ "repo": "o/ios", "iosIde": "Xcode" }));
+    // The Android IDE setting doesn't count for iOS repos.
+    assert!(error(&f.act("open", json!({ "repo": "o/ios" }))).contains("not installed"));
+    f.set(|s| s.ios_ide = "Xcode".into());
+    let reply = f.act("open", json!({ "repo": "o/ios" }));
     let worktree = path(&reply).display().to_string();
-    f.act("open", json!({ "repo": "o/ios", "iosIde": "VS Code" }));
+    f.set(|s| s.ios_ide = "VS Code".into());
+    f.act("open", json!({ "repo": "o/ios" }));
     assert_eq!(f.opened(), [
         format!("open -a {} {worktree}/App.xcodeproj", f.app("Xcode.app")),
         format!("open -a {} {worktree}", f.app("Visual Studio Code.app")),
     ]);
-    // The Android IDE setting doesn't count for iOS repos.
-    for ide in [json!("IntelliJ IDEA"), json!(null)] {
-        assert!(error(&f.act("open", json!({ "repo": "o/ios", "iosIde": ide }))).contains("not installed"));
-    }
 }
 
 #[test]
 fn deleted_branch_stops_ide_actions_before_anything_runs_but_not_claude() {
     let f = Fixture::new();
+    f.set(|s| s.ios_ide = "Xcode".into());
     let worktree = path(&f.act("open", json!({}))).to_owned(); // checked out while the PR was open
     f.android.delete_branch("feat/a");
-    for extra in [json!({}), json!({ "branch": "feat/gone" }), json!({ "branch": "feat/gone", "repo": "o/ios", "iosIde": "Xcode" })] {
+    for extra in [json!({}), json!({ "branch": "feat/gone" }), json!({ "branch": "feat/gone", "repo": "o/ios" })] {
         let reply = f.act("open", extra);
         assert!(error(&reply).contains("no longer exists on GitHub"));
         assert_eq!(reply["title"], "Branch not found");
@@ -163,35 +203,29 @@ fn device_run_updates_then_runs_in_the_background() {
     let reply = f.act("phone", json!({}));
     assert_eq!(path(&reply), worktree);
     assert_eq!(head(&worktree), pushed);
-    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-phone.log")));
-    // The repo has no Android SDK, so the run fails; the button's poll reports why.
-    let status = || handler::handle(&f.core, &json!({ "action": "status", "log": reply["log"] }));
+    assert_eq!(reply["run"], 0);
+    // The repo has no Android SDK, so the run fails; the button's poll reports why and where the log is.
+    let status = || f.send(json!({ "action": "status", "run": reply["run"] }));
     while status()["state"] == "running" {
         thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(status()["state"], "failed");
     assert!(status()["message"].as_str().unwrap().contains("local.properties"), "{}", status());
+    assert_eq!(status()["log"], json!(f.tmp.join("logs/feat-a-phone.log")));
 }
 
 #[test]
 fn emulator_run_uses_the_chosen_emulator() {
     let f = Fixture::new();
     write(f.core.paths.avd_dir.join("Medium_Phone.ini"), "");
-    for name in [json!("-wipe-data"), json!(""), json!(null)] {
-        assert!(error(&f.act("emulator", json!({ "emulator": name }))).contains("not found"));
+    for name in ["-wipe-data", ""] {
+        f.set(|s| s.emulator = name.into()); // not chosen yet, or deleted since
+        assert!(error(&f.act("emulator", json!({}))).contains("not found"));
     }
     assert!(!f.tmp.join("Android-feat-a").exists()); // rejected before anything runs
-    let reply = f.act("emulator", json!({ "emulator": "Medium_Phone" }));
-    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-emulator.log")));
+    f.set(|s| s.emulator = "Medium_Phone".into());
+    assert_eq!(f.act("emulator", json!({}))["run"], 0);
     assert_eq!(f.core.runs.latest()[0].device(), "Medium_Phone");
-}
-
-#[test]
-fn status_knows_only_this_apps_runs() {
-    let f = Fixture::new();
-    for log in [json!("/etc/passwd"), json!(f.tmp.join("logs/feat-a-phone.log")), json!(null), json!(3)] {
-        assert_eq!(error(&handler::handle(&f.core, &json!({ "action": "status", "log": log }))), "unknown run");
-    }
 }
 
 /// An xcrun that lists one simulator and logs its calls, like the stand-in.
@@ -205,16 +239,27 @@ exit 0
 fn simulator_run_uses_the_chosen_simulators_udid() {
     let f = Fixture::new();
     write(f.tmp.join("bin/xcrun"), XCRUN_WITH_A_SIMULATOR);
-    for name in [json!("iPhone 1 (iOS 26.3)"), json!(""), json!(null)] {
-        assert!(error(&f.act("simulator", json!({ "repo": "o/ios", "simulator": name }))).contains("not found"));
+    for udid in ["iPhone 17 (iOS 26.3)", ""] {
+        f.set(|s| s.simulator = udid.into()); // a label is no UDID
+        assert!(error(&f.act("simulator", json!({ "repo": "o/ios" }))).contains("not found"));
     }
     assert!(!f.tmp.join("Ios-feat-a").exists()); // rejected before anything runs
-    let reply = f.act("simulator", json!({ "repo": "o/ios", "simulator": "iPhone 17 (iOS 26.3)" }));
-    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-simulator.log")));
+    f.set(|s| s.simulator = "SIM-UDID".into());
+    assert_eq!(f.act("simulator", json!({ "repo": "o/ios" }))["run"], 0);
     let run = f.core.runs.latest().remove(0);
     assert_eq!(run.device(), "iPhone 17 (iOS 26.3)");
     while run.is_running() {
         thread::sleep(Duration::from_millis(50));
     }
     assert!(calls(&f.tmp.join("bin")).contains(&"xcrun simctl bootstatus SIM-UDID -b".to_owned()));
+    // It got as far as building the repo's scheme: the project folder just isn't checked in here.
+    assert!(run.status()["message"].as_str().unwrap().starts_with("no Xcode project in"), "{}", run.status());
+}
+
+#[test]
+fn status_knows_only_this_apps_runs() {
+    let f = Fixture::new();
+    for run in [json!(0), json!(99), json!("0"), json!(-1), json!(null)] {
+        assert_eq!(error(&f.send(json!({ "action": "status", "run": run }))), "unknown run");
+    }
 }
