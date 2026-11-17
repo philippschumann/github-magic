@@ -1,0 +1,11 @@
+#!/bin/sh
+d="$(dirname "$0")"
+echo "$*" >> "$d/calls.log"
+case "$*" in
+  "devices -l") cat "$d/devices_l.txt" ;;
+  "devices") cat "$d/devices.txt" ;;
+  *"emu avd name") printf '%s\r\nOK\r\n' "$(cat "$d/$2.avd" 2>/dev/null || echo Pixel_9_API_35)" ;;
+  *"getprop sys.boot_completed") echo 1 ;;
+  *"pm path android") echo package:/system/framework/framework-res.apk ;;
+  *"query-activities"*) cat "$d/activities.txt" ;;
+esac

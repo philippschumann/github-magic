@@ -1,0 +1,5 @@
+#!/bin/sh
+echo "xcodebuild $*" >> "$(dirname "$0")/calls.log"
+case "$*" in *-showBuildSettings*) echo '[{"buildSettings": {"WRAPPER_EXTENSION": "appex"}}, {"buildSettings":
+  {"WRAPPER_EXTENSION": "app", "TARGET_BUILD_DIR": "/b", "WRAPPER_NAME": "MyApp.app", "PRODUCT_BUNDLE_IDENTIFIER": "co.x"}}]' ;;
+esac

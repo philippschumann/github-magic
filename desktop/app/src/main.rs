@@ -3,6 +3,11 @@
 mod server;
 
 use std::io;
+use std::sync::Arc;
+
+use github_magic_core::Core;
+use github_magic_core::platform::Paths;
+use github_magic_core::settings::Config;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -13,7 +18,8 @@ fn main() {
         .setup(|app| {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // tray only, no Dock icon
             register_hosts()?;
-            server::start()?;
+            let paths = Paths::system();
+            server::start(Arc::new(Core { config: Config::load(&paths), paths }))?;
             let quit = MenuItem::with_id(app, "quit", "Quit Github Magic", true, None::<&str>)?;
             TrayIconBuilder::new()
                 .icon(tauri::include_image!("icons/tray.png"))

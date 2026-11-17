@@ -1,0 +1,5 @@
+#!/bin/sh
+t="$(dirname "$0")/../platform-tools"
+echo "$2" > "$t/emulator-5556.avd"
+printf 'List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n' > "$t/devices.txt"
+sleep 5

@@ -1,8 +1,21 @@
-//! Logic shared by the app and the bridge. Phase 2 moves the Python script's actions here.
+//! Logic shared by the app and the bridge: everything the extension's buttons do, without any UI.
+
+pub mod android;
+pub mod cmd;
+pub mod detect;
+pub mod handler;
+pub mod platform;
+pub mod settings;
 
 use std::ffi::{CStr, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
+
+/// What the handler works with. Tests build one around temp dirs.
+pub struct Core {
+    pub config: settings::Config,
+    pub paths: platform::Paths,
+}
 
 /// Native messaging caps host replies at 1 MB; requests are tiny. Both sides refuse bigger frames.
 pub const MAX_FRAME: usize = 1024 * 1024;
