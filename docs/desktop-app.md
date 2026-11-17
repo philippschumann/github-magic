@@ -345,9 +345,10 @@ Each phase is its own PR. Don't cut a release until phase 5. Until then, main is
    4. the run manager with phone and emulator runs, `status` and cancel
    5. iPhone and simulator runs
 
-   The handler sends ported actions to Rust and the rest to Python. The Rust side reads a hand-written `settings.json` in the final format, so `repos`, the per-repo app ID and scheme, and `phoneModels` are there from the start. The settings the extension still sends with each request override it until phase 3. The tray run lines and notifications come with the run manager. The launcher activity lookup replaces `START_ACTIVITY`.
+   The handler sends ported actions to Rust and the rest to Python. There's no `settings.json` yet. The Rust side gets `REPOS`, `APP_ID`, `IOS_SCHEME` and `PHONE_MODELS` by running `/usr/bin/python3` once to import `native-host/config.py` and print them as JSON. `APP_ID` and `IOS_SCHEME` apply to every repo, and the platform is detected as today. The settings the extension sends with each request (`worktreeDir`, `ide`, `iosIde`, `emulator`, `simulator`) are used as today. The tray run lines, notifications and the quit check come with the run manager. The launcher activity lookup replaces `START_ACTIVITY`.
    - Done when nothing reaches Python.
 3. **Settings in the app, shared settings page, extension switched over.**
+   - `settings.json`, which replaces reading `config.py`.
    - The shared `settings/` page as the extension's options page and the app's Settings window, `settings`, `set`, `choose_folder`, `add_repo`, `remove_repo`, the change broadcast, protocol 1, and all the extension changes above.
    - Done when the extension stores nothing, the same page works in both places, and a change made in one shows up in the other.
 4. **Python removed.**
