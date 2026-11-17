@@ -1,8 +1,8 @@
-//! The tray menu (one line per target that has had a run, then Settings… and Quit) and the notification when a run
-//! ends.
+//! The tray menu (one line per target that has had a run, then Update, Settings… and Quit), the notification when
+//! a run ends, and the updater behind the Update item.
 
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use github_magic_core::Core;
@@ -10,13 +10,23 @@ use github_magic_core::runs::{Run, State};
 use mac_notification_sys::{MainButton, Notification, NotificationResponse};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_updater::{Update, UpdaterExt};
+use tokio::sync::Notify;
 use tokio::sync::broadcast::error::RecvError;
 
 const TRAY: &str = "tray";
 /// A run's line and the menu item that shows it.
 type Lines = Vec<(Arc<Run>, Submenu<Wry>)>;
+
+/// A newer release that was found. It is installed only when its menu item is clicked.
+#[derive(Default)]
+struct Pending {
+    update: Mutex<Option<Update>>,
+    /// Tells the tray menu to show or drop the item.
+    changed: Notify,
+}
 
 pub fn start(app: &AppHandle, core: Arc<Core>) -> tauri::Result<()> {
     // Notifications then carry this app's name and icon. An unbundled development build has neither.
@@ -26,8 +36,11 @@ pub fn start(app: &AppHandle, core: Arc<Core>) -> tauri::Result<()> {
         .icon_as_template(true)
         .menu(&menu(app, &core)?.0)
         .build(app)?;
+    app.manage(Pending::default());
+    watch_updates(app.clone());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let pending = app.state::<Pending>();
         let mut events = core.runs.subscribe();
         let mut second = tokio::time::interval(Duration::from_secs(1));
         let mut lines = Lines::new();
@@ -39,14 +52,9 @@ pub fn start(app: &AppHandle, core: Arc<Core>) -> tauri::Result<()> {
                         Err(RecvError::Closed) => break,
                         Err(RecvError::Lagged(_)) => {}
                     }
-                    match menu(&app, &core) {
-                        Ok((menu, new_lines)) => {
-                            lines = new_lines;
-                            let _ = app.tray_by_id(TRAY).map(|tray| tray.set_menu(Some(menu)));
-                        }
-                        Err(e) => eprintln!("github-magic: couldn't build the tray menu: {e}"),
-                    }
+                    lines = rebuild(&app, &core).unwrap_or(lines);
                 }
+                _ = pending.changed.notified() => lines = rebuild(&app, &core).unwrap_or(lines),
                 // The elapsed time of the runs still going.
                 _ = second.tick() => for (run, line) in &lines {
                     if run.is_running() {
@@ -57,6 +65,20 @@ pub fn start(app: &AppHandle, core: Arc<Core>) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+/// Shows the menu as it is now. None: it couldn't be built, so the old one stays.
+fn rebuild(app: &AppHandle, core: &Core) -> Option<Lines> {
+    match menu(app, core) {
+        Ok((menu, lines)) => {
+            let _ = app.tray_by_id(TRAY).map(|tray| tray.set_menu(Some(menu)));
+            Some(lines)
+        }
+        Err(e) => {
+            eprintln!("github-magic: couldn't build the tray menu: {e}");
+            None
+        }
+    }
 }
 
 fn menu(app: &AppHandle, core: &Core) -> tauri::Result<(Menu<Wry>, Lines)> {
@@ -73,6 +95,10 @@ fn menu(app: &AppHandle, core: &Core) -> tauri::Result<(Menu<Wry>, Lines)> {
     }
     if !lines.is_empty() {
         menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    let update = app.try_state::<Pending>().and_then(|pending| pending.update.lock().unwrap().as_ref().map(|update| update.version.clone()));
+    if let Some(version) = update {
+        menu.append(&MenuItem::with_id(app, "update", format!("Update to {version}"), true, None::<&str>)?)?;
     }
     menu.append(&MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit Github Magic", true, None::<&str>)?)?;
@@ -112,6 +138,7 @@ pub fn on_click(app: &AppHandle, core: &Arc<Core>, id: &str) {
     match id.split_once(':') {
         Some(("cancel", target)) => drop(run(target).map(|run| run.cancel())),
         Some(("log", target)) => drop(run(target).map(|run| show_log(&run))),
+        _ if id == "update" => update(app, core),
         _ if id == "settings" => crate::show_settings(app),
         _ if id == "quit" => quit(app, core),
         _ => {}
@@ -146,19 +173,67 @@ fn notify(run: &Arc<Run>) {
     });
 }
 
-/// Quits, after asking if runs are still going: quitting cancels them. Emulators and simulators keep running.
-pub fn quit(app: &AppHandle, core: &Arc<Core>) {
+/// Does `then` once the app may stop: at once, or after the user agreed to cancel the runs still going. Emulators
+/// and simulators keep running.
+fn before_stopping(app: &AppHandle, core: &Arc<Core>, verb: &'static str, then: impl FnOnce() + Send + 'static) {
     let question = match core.runs.latest().iter().filter(|run| run.is_running()).count() {
-        0 => return app.exit(0),
-        1 => "1 run in progress. Quit and cancel it?".to_owned(),
-        runs => format!("{runs} runs in progress. Quit and cancel them?"),
+        0 => return then(),
+        1 => format!("1 run in progress. {verb} and cancel it?"),
+        runs => format!("{runs} runs in progress. {verb} and cancel them?"),
     };
-    let (app, core) = (app.clone(), core.clone());
-    let buttons = MessageDialogButtons::OkCancelCustom("Quit".into(), "Cancel".into());
-    app.clone().dialog().message(question).title("Quit Github Magic").buttons(buttons).show(move |quit| {
-        if quit {
+    let core = core.clone();
+    let buttons = MessageDialogButtons::OkCancelCustom(verb.into(), "Cancel".into());
+    app.dialog().message(question).title(format!("{verb} Github Magic")).buttons(buttons).show(move |agreed| {
+        if agreed {
             core.runs.cancel_all();
-            app.exit(0);
+            then();
         }
+    });
+}
+
+pub fn quit(app: &AppHandle, core: &Arc<Core>) {
+    let quitting = app.clone();
+    before_stopping(app, core, "Quit", move || quitting.exit(0));
+}
+
+/// Looks for a newer release at launch and then every 24 h.
+fn watch_updates(app: AppHandle) {
+    if tauri::is_dev() {
+        return; // a development build isn't replaced by a release
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match app.updater() {
+                Ok(updater) => match updater.check().await {
+                    Ok(Some(update)) => {
+                        let pending = app.state::<Pending>();
+                        *pending.update.lock().unwrap() = Some(update);
+                        pending.changed.notify_one();
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("github-magic: couldn't look for updates: {e}"),
+                },
+                Err(e) => eprintln!("github-magic: couldn't look for updates: {e}"),
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
+}
+
+/// Downloads the found release, checks its signature, replaces the app and restarts it.
+fn update(app: &AppHandle, core: &Arc<Core>) {
+    let updating = app.clone();
+    before_stopping(app, core, "Update", move || {
+        tauri::async_runtime::spawn(async move {
+            let pending = updating.state::<Pending>();
+            let Some(update) = pending.update.lock().unwrap().take() else { return };
+            match update.download_and_install(|_, _| {}, || {}).await {
+                Ok(()) => updating.restart(),
+                Err(e) => {
+                    updating.dialog().message(format!("The update to {} failed: {e}", update.version)).title("Github Magic").show(|_| {});
+                    *pending.update.lock().unwrap() = Some(update); // still on offer
+                }
+            }
+        });
     });
 }

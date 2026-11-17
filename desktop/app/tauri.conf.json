@@ -7,7 +7,7 @@
       "script": "cargo build -p github-magic-bridge",
       "wait": true
     },
-    "beforeBuildCommand": "cargo build --release -p github-magic-bridge",
+    "beforeBuildCommand": "./build-bridge.sh",
     "frontendDist": "../../settings"
   },
   "app": {
@@ -19,14 +19,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app"
-    ],
+    "targets": ["app", "dmg"],
     "macOS": {
       "signingIdentity": "-",
       "files": {
         "MacOS/github-magic-bridge": "../target/release/github-magic-bridge"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM2NUJGRDE0QTA1Mzc3M0YKUldRL2QxT2dGUDFieGp3WERJb2owMC9Ic2k1L0N5U2taUEhYdFcxUmxwaHJxaklSWitBVHEzckYK",
+      "endpoints": ["https://github.com/philippschumann/github-magic/releases/latest/download/latest.json"]
     }
   }
 }
