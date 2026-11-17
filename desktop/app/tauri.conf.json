@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Github Magic",
+  "identifier": "com.philippschumann.github-magic",
+  "build": {
+    "beforeDevCommand": { "script": "cargo build -p github-magic-bridge", "wait": true },
+    "beforeBuildCommand": "cargo build --release -p github-magic-bridge"
+  },
+  "app": { "windows": [] },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "macOS": {
+      "signingIdentity": "-",
+      "files": { "MacOS/github-magic-bridge": "../target/release/github-magic-bridge" }
+    }
+  }
+}

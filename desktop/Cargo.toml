@@ -1,0 +1,8 @@
+[workspace]
+members = ["core", "bridge", "app"]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.0" # same as manifest.json
+edition = "2024"
+license = "MIT"
