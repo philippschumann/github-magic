@@ -1,0 +1,19 @@
+# Lints and tests the desktop app (desktop/) on every pull request.
+name: Desktop
+
+on:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
