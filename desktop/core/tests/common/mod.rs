@@ -82,6 +82,11 @@ impl Repo {
         git(&["-C", pusher, "push", "-q", "origin", &format!("HEAD:{branch}")]);
         git(&["-C", pusher, "rev-parse", "HEAD"])
     }
+
+    /// The branch is deleted on GitHub, as after a merge.
+    pub fn delete_branch(&self, branch: &str) {
+        git(&["-C", self.pusher.to_str().unwrap(), "push", "-q", "origin", &format!(":{branch}")]);
+    }
 }
 
 pub fn head(path: &Path) -> String {

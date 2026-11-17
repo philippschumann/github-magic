@@ -1,6 +1,7 @@
 //! Logic shared by the app and the bridge: everything the extension's buttons do, without any UI.
 
 pub mod android;
+pub mod claude;
 pub mod cmd;
 pub mod detect;
 pub mod git;

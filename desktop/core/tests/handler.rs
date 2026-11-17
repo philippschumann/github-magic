@@ -121,15 +121,20 @@ fn ios_repo_opens_in_the_chosen_ios_ide_xcode_with_its_project() {
 }
 
 #[test]
-fn deleted_branch_stops_before_anything_runs() {
+fn deleted_branch_stops_ide_actions_before_anything_runs_but_not_claude() {
     let f = Fixture::new();
-    for extra in [json!({ "branch": "feat/gone" }), json!({ "branch": "feat/gone", "repo": "o/ios", "iosIde": "Xcode" })] {
+    let worktree = path(&f.act("open", json!({}))).to_owned(); // checked out while the PR was open
+    f.android.delete_branch("feat/a");
+    for extra in [json!({}), json!({ "branch": "feat/gone" }), json!({ "branch": "feat/gone", "repo": "o/ios", "iosIde": "Xcode" })] {
         let reply = f.act("open", extra);
-        assert!(error(&reply).contains("feat/gone no longer exists on GitHub"));
+        assert!(error(&reply).contains("no longer exists on GitHub"));
         assert_eq!(reply["title"], "Branch not found");
     }
-    assert_eq!(f.opened(), [] as [&str; 0]);
+    assert_eq!(f.opened().len(), 1);
     assert!(!f.tmp.join("Android-feat-gone").exists());
+    assert_eq!(path(&f.act("claude", json!({ "title": "Fix login" }))), worktree);
+    let folder = worktree.to_str().unwrap().replace('/', "%2F");
+    assert_eq!(f.opened()[1], format!("open claude://code/new?folder={folder}&q=Fix%20login%20%28%231%29%3A%20"));
 }
 
 #[test]

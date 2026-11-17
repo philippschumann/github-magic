@@ -6,13 +6,13 @@ use serde_json::{Value, json};
 
 use crate::platform::{IDES, IOS_IDES, installed_ides};
 use crate::settings::{self, CONFIG};
-use crate::{Core, cmd, detect, git};
+use crate::{Core, claude, cmd, detect, git};
 
 pub const RUN_TARGETS: [&str; 4] = ["phone", "emulator", "iphone", "simulator"];
 
 /// shortcut: actions not ported yet still go to the Python script; gone at the end of phase 2.
 pub fn ported(msg: &Value) -> bool {
-    matches!(msg.get("action").map_or(Some("open"), Value::as_str), Some("detect" | "open"))
+    matches!(msg.get("action").map_or(Some("open"), Value::as_str), Some("detect" | "open" | "claude"))
 }
 
 pub fn handle(core: &Core, msg: &Value) -> Value {
@@ -65,7 +65,8 @@ fn try_handle(core: &Core, msg: &Value) -> Result<Value, String> {
             cmd::run(cmd::command(paths, "open").arg("-a").arg(app).arg(target))?;
             git::update(paths, &path, branch)?; // `open` returns at once, so the IDE loads the project while the update runs
         }
-        _ => return Err(format!("{action} for #{pr} isn't ported yet")),
+        ("claude", ..) => claude::open_claude(paths, &path, &format!("{} (#{pr}): ", msg["title"].as_str().unwrap_or_default()))?,
+        _ => return Err(format!("{action} isn't ported yet")),
     }
     Ok(json!({ "ok": true, "path": path }))
 }
