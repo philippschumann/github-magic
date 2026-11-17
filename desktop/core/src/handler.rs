@@ -9,11 +9,6 @@ use crate::platform::{IDES, IOS_IDES, installed_ides};
 use crate::settings::{self, CONFIG};
 use crate::{Core, claude, cmd, detect, git, runs};
 
-/// shortcut: actions not ported yet still go to the Python script; gone at the end of phase 2.
-pub fn ported(msg: &Value) -> bool {
-    matches!(msg.get("action").map_or(Some("open"), Value::as_str), Some("detect" | "open" | "claude" | "status" | "phone" | "emulator"))
-}
-
 pub fn handle(core: &Arc<Core>, msg: &Value) -> Value {
     try_handle(core, msg).unwrap_or_else(|error| json!({ "ok": false, "error": error }))
 }
@@ -49,13 +44,20 @@ fn try_handle(core: &Arc<Core>, msg: &Value) -> Result<Value, String> {
         }
         _ => None,
     };
-    // The emulator name goes to the emulator command as an argument.
-    let device = match action {
+    // The emulator name goes to the emulator command as an argument; the simulator becomes a UDID from simctl.
+    // `label` is what the tray menu calls the device.
+    let not_found = |kind: &str| format!("{kind} {} not found; choose another in the extension's settings", msg[kind]);
+    let (device, label) = match action {
         "emulator" => {
             let avd = msg["emulator"].as_str().filter(|avd| detect::avds(paths).iter().any(|known| known == avd));
-            avd.ok_or_else(|| format!("emulator {} not found; choose another in the extension's settings", msg["emulator"]))?
+            let avd = avd.ok_or_else(|| not_found("emulator"))?;
+            (avd.to_owned(), avd)
         }
-        _ => "",
+        "simulator" => {
+            let simulator = detect::simulators(paths).into_iter().find(|(label, _)| msg["simulator"] == *label);
+            (simulator.ok_or_else(|| not_found("simulator"))?.1, msg["simulator"].as_str().unwrap_or_default())
+        }
+        _ => (String::new(), action),
     };
 
     // Checked before anything opens: an existing worktree would open, then fail to update. The Claude button skips
@@ -81,8 +83,7 @@ fn try_handle(core: &Arc<Core>, msg: &Value) -> Result<Value, String> {
         _ => {
             git::update(paths, &path, branch)?;
             let target = runs::TARGETS.into_iter().find(|target| *target == action).expect("checked above");
-            let label = if device.is_empty() { target } else { device };
-            let run = runs::start(core, target, pr, branch, &path, device, label)?;
+            let run = runs::start(core, target, pr, branch, &path, &device, label)?;
             return Ok(json!({ "ok": true, "path": path, "log": run.log }));
         }
     }

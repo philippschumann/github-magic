@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-use crate::{Core, android, cmd};
+use crate::{Core, android, cmd, ios};
 
 pub const TARGETS: [&str; 4] = ["phone", "emulator", "iphone", "simulator"];
 
@@ -222,7 +222,7 @@ pub fn start(core: &Arc<Core>, target: &'static str, pr: u64, branch: &str, path
     *run.thread.lock().unwrap() = Some(thread::spawn(move || {
         job.finish(match job.target {
             "phone" | "emulator" => android::launch(&core, &job, &device),
-            target => Err(format!("{target} isn't ported yet")),
+            _ => ios::launch(&core, &job, &device),
         });
         let _ = core.runs.events.send(job);
     }));

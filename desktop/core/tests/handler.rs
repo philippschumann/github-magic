@@ -32,7 +32,7 @@ impl Fixture {
         }
         let root = |repo: &Repo| repo.root.to_str().unwrap().to_owned();
         let repos = [("o/android".to_owned(), root(&android)), ("o/ios".to_owned(), root(&ios))].into();
-        Self { core: Arc::new(Core::new(Config { repos, app_id: "com.example.myapp".into(), ..Config::default() }, paths(&tmp))), tmp, android }
+        Self { core: Arc::new(Core::new(Config { repos, app_id: "com.example.myapp".into(), ios_scheme: "MyApp".into(), ..Config::default() }, paths(&tmp))), tmp, android }
     }
 
     fn act(&self, action: &str, extra: Value) -> Value {
@@ -192,4 +192,29 @@ fn status_knows_only_this_apps_runs() {
     for log in [json!("/etc/passwd"), json!(f.tmp.join("logs/feat-a-phone.log")), json!(null), json!(3)] {
         assert_eq!(error(&handler::handle(&f.core, &json!({ "action": "status", "log": log }))), "unknown run");
     }
+}
+
+/// An xcrun that lists one simulator and logs its calls, like the stand-in.
+const XCRUN_WITH_A_SIMULATOR: &str = r#"#!/bin/sh
+echo "xcrun $*" >> "$(dirname "$0")/calls.log"
+[ "$*" = "simctl list devices available -j" ] && echo '{"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-3": [{"name": "iPhone 17", "udid": "SIM-UDID"}]}}'
+exit 0
+"#;
+
+#[test]
+fn simulator_run_uses_the_chosen_simulators_udid() {
+    let f = Fixture::new();
+    write(f.tmp.join("bin/xcrun"), XCRUN_WITH_A_SIMULATOR);
+    for name in [json!("iPhone 1 (iOS 26.3)"), json!(""), json!(null)] {
+        assert!(error(&f.act("simulator", json!({ "repo": "o/ios", "simulator": name }))).contains("not found"));
+    }
+    assert!(!f.tmp.join("Ios-feat-a").exists()); // rejected before anything runs
+    let reply = f.act("simulator", json!({ "repo": "o/ios", "simulator": "iPhone 17 (iOS 26.3)" }));
+    assert_eq!(reply["log"], json!(f.tmp.join("logs/feat-a-simulator.log")));
+    let run = f.core.runs.latest().remove(0);
+    assert_eq!(run.device(), "iPhone 17 (iOS 26.3)");
+    while run.is_running() {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(calls(&f.tmp.join("bin")).contains(&"xcrun simctl bootstatus SIM-UDID -b".to_owned()));
 }

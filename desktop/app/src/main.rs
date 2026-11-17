@@ -19,7 +19,7 @@ fn main() {
             register_hosts()?;
             let paths = Paths::system();
             let core = Arc::new(Core::new(Config::load(&paths), paths));
-            server::start(core.clone())?;
+            server::start(app.handle().clone(), core.clone())?;
             tray::start(app.handle(), core)?;
             Ok(())
         })

@@ -6,6 +6,7 @@ pub mod cmd;
 pub mod detect;
 pub mod git;
 pub mod handler;
+pub mod ios;
 pub mod platform;
 pub mod runs;
 pub mod settings;
